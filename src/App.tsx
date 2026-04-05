@@ -9,7 +9,7 @@ import SummaryBar from './components/SummaryBar';
 import FileTabs from './components/FileTabs';
 import WarningBanner from './components/WarningBanner';
 import PatternRegistryUI from './components/PatternRegistry';
-import MessagingSection from './components/sections/MessagingSection';
+import ExternalInterfacesSummary from './components/ExternalInterfacesSummary';
 import FunctionsSection from './components/sections/FunctionsSection';
 import IpcSection from './components/sections/IpcSection';
 import StructsSection from './components/sections/StructsSection';
@@ -317,18 +317,8 @@ export default function App() {
 
             {analysis && (
               <>
-                {/* ── Global: Messaging Interfaces ─────────────────────── */}
-                {analysis.messageInterfaces.length > 0 && (
-                  <div className="mb-8">
-                    <div className="flex items-center gap-3 mb-3">
-                      <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-                        Messaging Interfaces
-                      </h2>
-                      <span className="text-xs text-gray-600">across all files</span>
-                    </div>
-                    <MessagingSection messages={analysis.messageInterfaces} />
-                  </div>
-                )}
+                {/* ── Global: External Interface Summary ───────────────── */}
+                <ExternalInterfacesSummary analysis={analysis} />
 
                 {/* ── Per-file ──────────────────────────────────────────── */}
                 <div>
