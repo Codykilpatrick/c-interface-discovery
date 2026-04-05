@@ -12,11 +12,12 @@ COPY . .
 RUN npm ci
 RUN npm run build
 
-# Copy build output to nginx root
-RUN cp -r dist/* /usr/share/nginx/html/
+# Copy build output to nginx root (create dir — Alpine nginx doesn't pre-create it)
+RUN mkdir -p /usr/share/nginx/html && cp -r dist/* /usr/share/nginx/html/
 
-# Copy nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Copy nginx config (Alpine nginx uses http.d/, not conf.d/)
+RUN rm -f /etc/nginx/http.d/default.conf
+COPY nginx.conf /etc/nginx/http.d/default.conf
 
 # Expose both prod (80) and dev (3000) ports
 EXPOSE 80 3000
