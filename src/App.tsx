@@ -218,6 +218,19 @@ export default function App() {
   const activeFileAnalysis: FileAnalysis | null =
     analysis?.files.find((f) => f.filename === activeFile) ?? null;
 
+  // Structs visible in the active file: locally defined + typeDict structs referenced by name
+  const activeFileContent = fileRegistry.getSources().find((f) => f.filename === activeFile)?.content ?? '';
+  const activeFileStructs = activeFileAnalysis
+    ? [
+        ...activeFileAnalysis.structs,
+        ...(analysis?.typeDict.structs.filter(
+          (s) =>
+            !activeFileAnalysis.structs.some((ls) => ls.name === s.name) &&
+            activeFileContent.includes(s.name)
+        ) ?? []),
+      ]
+    : [];
+
   const allWarnings = [
     ...fileRegistry.warnings,
     ...(analysis?.warnings.filter((w) => w.kind !== 'collision') ?? []),
@@ -318,7 +331,7 @@ export default function App() {
             {analysis && (
               <>
                 {/* ── Global: External Interface Summary ───────────────── */}
-                <ExternalInterfacesSummary analysis={analysis} />
+                <ExternalInterfacesSummary analysis={analysis} sourceFiles={fileRegistry.getSources()} />
 
                 {/* ── Per-file ──────────────────────────────────────────── */}
                 <div>
@@ -334,7 +347,7 @@ export default function App() {
                     <div className="space-y-2 mt-2">
                       <FunctionsSection functions={activeFileAnalysis.functions} />
                       <IpcSection ipc={activeFileAnalysis.ipc} />
-                      <StructsSection structs={activeFileAnalysis.structs} />
+                      <StructsSection structs={activeFileStructs} sourceFiles={fileRegistry.getSources()} />
                       <ExternsSection externs={activeFileAnalysis.externs} />
                       <DefinesSection defines={activeFileAnalysis.defines} />
                       <UnknownsSection

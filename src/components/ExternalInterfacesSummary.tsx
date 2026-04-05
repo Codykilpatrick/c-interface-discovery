@@ -1,8 +1,10 @@
-import type { CFunction, IpcType, StringAnalysis } from '../analyzer/types';
+import type { CFunction, FileRef, IpcType, LoadedFile, MessageInterface, StringAnalysis } from '../analyzer/types';
 import { useState } from 'react';
+import { findReferences } from '../utils/findReferences';
 
 interface ExternalInterfacesSummaryProps {
   analysis: StringAnalysis;
+  sourceFiles: LoadedFile[];
 }
 
 // ── IPC type → display group ──────────────────────────────────────────────────
@@ -25,8 +27,8 @@ const FILE_DISPLAY_LIMIT = 3;
 interface IpcGroupData {
   label: string;
   color: string;
-  callNames: string[];   // deduplicated call function names
-  files: string[];       // files that use this mechanism
+  callNames: string[];
+  files: string[];
 }
 
 interface ExportedFn {
@@ -35,7 +37,6 @@ interface ExportedFn {
 }
 
 function callName(detail: string): string {
-  // Extract the function name from a call detail string like "socket(AF_INET, ...)"
   return detail.split('(')[0].trim();
 }
 
@@ -80,9 +81,112 @@ function buildExportedFunctions(analysis: StringAnalysis): ExportedFn[] {
   return result;
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Shared: inline reference lines ───────────────────────────────────────────
 
-function FileList({ files }: { files: string[] }) {
+function RefLines({ refs }: { refs: FileRef[] }) {
+  if (refs.length === 0) return <p className="text-xs text-gray-600 italic px-1">No references found</p>;
+  return (
+    <div className="space-y-2 mt-1">
+      {refs.map((r) => (
+        <div key={r.filename}>
+          <div className="text-xs font-mono text-gray-500 mb-0.5">{r.filename}</div>
+          {r.lines.map((l) => (
+            <div key={l.lineNumber} className="flex gap-2 font-mono text-xs leading-5">
+              <span className="text-gray-700 w-8 shrink-0 text-right select-none">{l.lineNumber}</span>
+              <span className="text-gray-400 truncate">{l.text}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Struct reference popup ────────────────────────────────────────────────────
+
+function StructRefLink({ structName, sourceFiles }: { structName: string; sourceFiles: LoadedFile[] }) {
+  const [open, setOpen] = useState(false);
+  const [refs, setRefs] = useState<FileRef[] | null>(null);
+
+  function toggle() {
+    if (!open && refs === null) {
+      setRefs(findReferences(structName, sourceFiles));
+    }
+    setOpen((v) => !v);
+  }
+
+  return (
+    <span className="inline-block">
+      <button
+        className="font-mono text-xs text-cyan-600 hover:text-cyan-400 transition-colors underline underline-offset-2 decoration-dotted"
+        onClick={(e) => { e.stopPropagation(); toggle(); }}
+        title="Show struct references"
+      >
+        → {structName}
+      </button>
+      {open && refs !== null && (
+        <div className="mt-2 bg-gray-900 border border-gray-700 rounded p-2 text-left">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-gray-500 font-mono">{structName} references</span>
+            <button className="text-gray-600 hover:text-gray-400 text-xs ml-4" onClick={(e) => { e.stopPropagation(); setOpen(false); }}>✕</button>
+          </div>
+          <RefLines refs={refs} />
+        </div>
+      )}
+    </span>
+  );
+}
+
+// ── Message type row ──────────────────────────────────────────────────────────
+
+function MsgTypeRow({ msg, sourceFiles }: { msg: MessageInterface; sourceFiles: LoadedFile[] }) {
+  const [open, setOpen] = useState(false);
+  const hasRefs = msg.usedIn.length > 0;
+
+  return (
+    <div className="border-b border-gray-800/40 last:border-0">
+      <button
+        className={`w-full flex items-center gap-3 text-sm py-1.5 text-left transition-colors ${hasRefs ? 'hover:bg-gray-800/30 cursor-pointer' : 'cursor-default'}`}
+        onClick={() => hasRefs && setOpen((v) => !v)}
+        title={hasRefs ? 'Click to see file references' : undefined}
+      >
+        {hasRefs && (
+          <span className="text-gray-700 text-xs w-3 shrink-0">{open ? '▼' : '▶'}</span>
+        )}
+        {!hasRefs && <span className="w-3 shrink-0" />}
+        <span className="font-mono text-gray-200 w-44 shrink-0 truncate">{msg.msgTypeConstant}</span>
+        <span className="font-mono text-gray-600 text-xs w-14 shrink-0">{msg.msgTypeValue}</span>
+        <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
+          msg.direction === 'producer' ? 'bg-blue-900/50 text-blue-300' :
+          msg.direction === 'consumer' ? 'bg-green-900/50 text-green-300' :
+          msg.direction === 'both'     ? 'bg-purple-900/50 text-purple-300' :
+                                         'bg-gray-800 text-gray-500'
+        }`}>{msg.direction}</span>
+        {msg.transport && (
+          <span className="text-xs text-gray-600 shrink-0">via {msg.transport}</span>
+        )}
+        {msg.struct ? (
+          <span onClick={(e) => e.stopPropagation()}>
+            <StructRefLink structName={msg.struct.name} sourceFiles={sourceFiles} />
+          </span>
+        ) : (
+          <span className="text-xs text-gray-700">struct unresolved</span>
+        )}
+        <span className="text-xs text-gray-700 truncate ml-auto">{msg.definedIn}</span>
+      </button>
+
+      {open && (
+        <div className="pl-6 pr-3 pb-2 bg-gray-900/40">
+          <RefLines refs={msg.usedIn} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── IPC group ─────────────────────────────────────────────────────────────────
+
+function FileBadges({ files }: { files: string[] }) {
   const [expanded, setExpanded] = useState(false);
   const visible = expanded ? files : files.slice(0, FILE_DISPLAY_LIMIT);
   const hidden = files.length - FILE_DISPLAY_LIMIT;
@@ -113,10 +217,12 @@ function IpcGroupRow({ group }: { group: IpcGroupData }) {
           {group.callNames.join('()  ') + '()'}
         </span>
       </div>
-      <FileList files={group.files} />
+      <FileBadges files={group.files} />
     </div>
   );
 }
+
+// ── Exported function row ─────────────────────────────────────────────────────
 
 function ExportedFnRow({ item }: { item: ExportedFn }) {
   const { fn, file } = item;
@@ -137,7 +243,7 @@ function ExportedFnRow({ item }: { item: ExportedFn }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ExternalInterfacesSummary({ analysis }: ExternalInterfacesSummaryProps) {
+export default function ExternalInterfacesSummary({ analysis, sourceFiles }: ExternalInterfacesSummaryProps) {
   const ipcGroups = buildIpcGroups(analysis);
   const exportedFns = buildExportedFunctions(analysis);
 
@@ -167,26 +273,11 @@ export default function ExternalInterfacesSummary({ analysis }: ExternalInterfac
         <div className="px-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-gray-600 pt-3 pb-1">
             Message Types
+            <span className="ml-2 font-normal normal-case text-gray-700">(click row to see references)</span>
           </div>
-          <div className="py-2 space-y-1">
+          <div className="py-1">
             {analysis.messageInterfaces.map((msg) => (
-              <div key={msg.msgTypeConstant} className="flex items-center gap-3 text-sm py-1 border-b border-gray-800/40 last:border-0">
-                <span className="font-mono text-gray-200 w-48 shrink-0 truncate">{msg.msgTypeConstant}</span>
-                <span className="font-mono text-gray-600 text-xs w-16 shrink-0">{msg.msgTypeValue}</span>
-                <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
-                  msg.direction === 'producer' ? 'bg-blue-900/50 text-blue-300' :
-                  msg.direction === 'consumer' ? 'bg-green-900/50 text-green-300' :
-                  msg.direction === 'both'     ? 'bg-purple-900/50 text-purple-300' :
-                                                 'bg-gray-800 text-gray-500'
-                }`}>{msg.direction}</span>
-                {msg.transport && (
-                  <span className="text-xs text-gray-600 shrink-0">via {msg.transport}</span>
-                )}
-                {msg.struct && (
-                  <span className="font-mono text-xs text-cyan-700 truncate">→ {msg.struct.name}</span>
-                )}
-                <span className="text-xs text-gray-700 truncate ml-auto">{msg.definedIn}</span>
-              </div>
+              <MsgTypeRow key={msg.msgTypeConstant} msg={msg} sourceFiles={sourceFiles} />
             ))}
           </div>
         </div>
@@ -204,7 +295,7 @@ export default function ExternalInterfacesSummary({ analysis }: ExternalInterfac
         </div>
       )}
 
-      <div className="h-3" /> {/* bottom padding */}
+      <div className="h-3" />
     </div>
   );
 }

@@ -73,6 +73,16 @@ export interface IpcCall {
   detail: string;
 }
 
+export interface CodeLine {
+  lineNumber: number;   // 1-based
+  text: string;         // trimmed source line
+}
+
+export interface FileRef {
+  filename: string;
+  lines: CodeLine[];
+}
+
 export interface MessageInterface {
   msgTypeConstant: string;      // e.g. MSG_TYPE_ACOUSTIC
   msgTypeValue: string;         // e.g. 0x01
@@ -82,7 +92,7 @@ export interface MessageInterface {
   directionConfident: boolean;  // false = show "manual review needed"
   transport: IpcType | null;
   definedIn: string;
-  usedIn: string[];
+  usedIn: FileRef[];            // files that reference this constant, with line numbers
 }
 
 export interface RiskFlag {
