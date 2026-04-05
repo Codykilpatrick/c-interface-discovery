@@ -75,8 +75,8 @@ export async function analyzeString(
     }
   }
 
-  // Pass 4: Extract messaging interfaces
-  const messageInterfaces = extractMessageInterfaces(fileAnalyses, typeDict, patterns);
+  // Pass 4: Extract messaging interfaces (pass source files for content-based direction inference)
+  const messageInterfaces = extractMessageInterfaces(fileAnalyses, typeDict, patterns, sources);
 
   return {
     files: fileAnalyses,

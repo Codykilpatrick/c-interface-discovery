@@ -4,6 +4,7 @@ import type {
   CustomPattern,
   FileAnalysis,
   IpcType,
+  LoadedFile,
   MessageInterface,
   MsgDirection,
   TypeDict,
@@ -87,38 +88,45 @@ function resolveStruct(constant: string, typeDict: TypeDict): CStruct | null {
 }
 
 /**
- * Determine which source files actually reference a constant by scanning
- * raw content (Phase 4 heuristic; tree-sitter AST would be more precise).
+ * Find source files that reference a constant by scanning raw content.
+ * Constants are typically defined in headers, so we can't rely on
+ * FileAnalysis.defines — instead we text-search the source content.
  */
-function filesUsingConstant(constant: string, analyses: FileAnalysis[]): string[] {
+function filesUsingConstant(
+  constant: string,
+  analyses: FileAnalysis[],
+  sourceFiles: LoadedFile[]
+): string[] {
+  // Build a map from filename to content for O(1) lookup
+  const contentByFile = new Map(sourceFiles.map((f) => [f.filename, f.content]));
+
   return analyses
     .filter((a) => {
-      // Check if defined in this file's defines list (already captured by source analyzer)
-      const inDefines = a.defines.some((d) => d.name === constant);
-      // OR referenced in raw IPC call details — we don't have raw content here,
-      // so we rely on what sourceAnalyzer captured.
-      return inDefines;
+      const content = contentByFile.get(a.filename);
+      return content !== undefined && content.includes(constant);
     })
     .map((a) => a.filename);
 }
 
 /**
- * Infer message direction from IPC calls in the analyses.
- * If any send-side call appears alongside the constant → producer
- * If any recv-side call appears → consumer
- * Both → both
+ * Infer message direction from IPC calls in files that reference the constant.
+ * Uses raw source content to find which files use the constant (handles the
+ * common case where constants are defined in headers, not source files).
  */
 function inferDirection(
   constant: string,
-  analyses: FileAnalysis[]
+  analyses: FileAnalysis[],
+  sourceFiles: LoadedFile[]
 ): { direction: MsgDirection; confident: boolean; transport: IpcType | null } {
   let hasSend = false;
   let hasRecv = false;
   let transport: IpcType | null = null;
 
+  const contentByFile = new Map(sourceFiles.map((f) => [f.filename, f.content]));
+
   for (const a of analyses) {
-    const definesConstant = a.defines.some((d) => d.name === constant);
-    if (!definesConstant) continue;
+    const content = contentByFile.get(a.filename);
+    if (!content || !content.includes(constant)) continue;
 
     for (const ipcCall of a.ipc) {
       const callName = ipcCall.detail.split('(')[0].trim().toLowerCase();
@@ -142,7 +150,8 @@ function inferDirection(
 export function extractMessageInterfaces(
   analyses: FileAnalysis[],
   typeDict: TypeDict,
-  patterns: CustomPattern[]
+  patterns: CustomPattern[],
+  sourceFiles: LoadedFile[] = []
 ): MessageInterface[] {
   const allDefines = collectAllDefines(analyses, typeDict);
   const msgConstants = allDefines.filter((d) => isMsgConstant(d.name, patterns));
@@ -151,11 +160,12 @@ export function extractMessageInterfaces(
     // Step 2: attempt struct resolution
     const struct = resolveStruct(def.name, typeDict);
 
-    // Step 3: direction inference
-    const { direction, confident, transport } = inferDirection(def.name, analyses);
+    // Step 3: direction inference (text-search source content for constant references)
+    const { direction, confident, transport } = inferDirection(def.name, analyses, sourceFiles);
 
     // Step 4: files referencing this constant
-    const usedIn = filesUsingConstant(def.name, analyses).filter((f) => f !== def.sourceFile);
+    const usedIn = filesUsingConstant(def.name, analyses, sourceFiles)
+      .filter((f) => f !== def.sourceFile);
 
     return {
       msgTypeConstant: def.name,
