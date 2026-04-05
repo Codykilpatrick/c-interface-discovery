@@ -83,6 +83,11 @@ export interface FileRef {
   lines: CodeLine[];
 }
 
+export interface MsgFileRole {
+  filename: string;
+  role: 'producer' | 'consumer' | 'both';
+}
+
 export interface MessageInterface {
   msgTypeConstant: string;      // e.g. MSG_TYPE_ACOUSTIC
   msgTypeValue: string;         // e.g. 0x01
@@ -93,6 +98,7 @@ export interface MessageInterface {
   transport: IpcType | null;
   definedIn: string;
   usedIn: FileRef[];            // files that reference this constant, with line numbers
+  fileRoles: MsgFileRole[];     // per-file producer/consumer role for graph edges
 }
 
 export interface RiskFlag {

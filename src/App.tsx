@@ -10,6 +10,7 @@ import FileTabs from './components/FileTabs';
 import WarningBanner from './components/WarningBanner';
 import PatternRegistryUI from './components/PatternRegistry';
 import ExternalInterfacesSummary from './components/ExternalInterfacesSummary';
+import InterfaceGraph from './components/InterfaceGraph';
 import FunctionsSection from './components/sections/FunctionsSection';
 import IpcSection from './components/sections/IpcSection';
 import StructsSection from './components/sections/StructsSection';
@@ -32,6 +33,7 @@ export default function App() {
   const [patterns, setPatterns] = useState<CustomPattern[]>([]);
   const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map());
   const [patternPrefill, setPatternPrefill] = useState<string | undefined>();
+  const [view, setView] = useState<'interfaces' | 'graph' | 'per-file'>('interfaces');
 
   // Ref mirrors parserReady so callbacks always see current value without stale closure
   const parserReadyRef = useRef(false);
@@ -330,34 +332,68 @@ export default function App() {
 
             {analysis && (
               <>
-                {/* ── Global: External Interface Summary ───────────────── */}
-                <ExternalInterfacesSummary analysis={analysis} sourceFiles={fileRegistry.getSources()} />
-
-                {/* ── Per-file ──────────────────────────────────────────── */}
-                <div>
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-                    Per-file Analysis
-                  </h2>
-                  <FileTabs
-                    files={analysis.files}
-                    activeFile={activeFile}
-                    onSelect={setActiveFile}
-                  />
-                  {activeFileAnalysis && (
-                    <div className="space-y-2 mt-2">
-                      <FunctionsSection functions={activeFileAnalysis.functions} />
-                      <IpcSection ipc={activeFileAnalysis.ipc} />
-                      <StructsSection structs={activeFileStructs} sourceFiles={fileRegistry.getSources()} />
-                      <ExternsSection externs={activeFileAnalysis.externs} />
-                      <DefinesSection defines={activeFileAnalysis.defines} />
-                      <UnknownsSection
-                      unknownCalls={activeFileAnalysis.unknownCalls}
-                      onAddAsPattern={(fn) => setPatternPrefill(fn)}
-                    />
-                      <RiskSection risks={activeFileAnalysis.risks} />
-                    </div>
-                  )}
+                {/* ── View tabs ─────────────────────────────────────────── */}
+                <div className="flex gap-1 mb-4 border-b border-gray-800 pb-0">
+                  {([
+                    { id: 'interfaces', label: 'Interfaces' },
+                    { id: 'graph',      label: 'Graph' },
+                    { id: 'per-file',   label: 'Per-file' },
+                  ] as const).map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setView(tab.id)}
+                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                        view === tab.id
+                          ? 'border-blue-500 text-blue-400'
+                          : 'border-transparent text-gray-500 hover:text-gray-300'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
+
+                {/* ── Interfaces tab ────────────────────────────────────── */}
+                {view === 'interfaces' && (
+                  <ExternalInterfacesSummary analysis={analysis} sourceFiles={fileRegistry.getSources()} />
+                )}
+
+                {/* ── Graph tab ─────────────────────────────────────────── */}
+                {view === 'graph' && (
+                  <InterfaceGraph
+                    analysis={analysis}
+                    onSelectFile={(filename) => {
+                      setActiveFile(filename);
+                      setView('per-file');
+                    }}
+                  />
+                )}
+
+                {/* ── Per-file tab ──────────────────────────────────────── */}
+                {view === 'per-file' && (
+                  <div>
+                    <FileTabs
+                      files={analysis.files}
+                      activeFile={activeFile}
+                      onSelect={setActiveFile}
+                    />
+                    {activeFileAnalysis && (
+                      <div className="space-y-2 mt-2">
+                        <FunctionsSection functions={activeFileAnalysis.functions} />
+                        <IpcSection ipc={activeFileAnalysis.ipc} />
+                        <StructsSection structs={activeFileStructs} sourceFiles={fileRegistry.getSources()} />
+                        <ExternsSection externs={activeFileAnalysis.externs} />
+                        <DefinesSection defines={activeFileAnalysis.defines} />
+                        <UnknownsSection
+                          unknownCalls={activeFileAnalysis.unknownCalls}
+                          onAddAsPattern={(fn) => setPatternPrefill(fn)}
+                        />
+                        <RiskSection risks={activeFileAnalysis.risks} />
+                      </div>
+                    )}
+                  </div>
+                )}
+
 
                 {/* ── Custom patterns ───────────────────────────────────── */}
                 <div className="mt-8 border-t border-gray-800 pt-6">

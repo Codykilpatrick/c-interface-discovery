@@ -8,6 +8,7 @@ import type {
   LoadedFile,
   MessageInterface,
   MsgDirection,
+  MsgFileRole,
   TypeDict,
 } from './types';
 import { findReferences } from '../utils/findReferences';
@@ -139,6 +140,35 @@ function inferDirection(
   return { direction: 'unknown', confident: false, transport };
 }
 
+/**
+ * For each file referencing the constant, determine whether it is a
+ * producer, consumer, or both based on its own IPC calls.
+ */
+function computeFileRoles(refs: FileRef[], analyses: FileAnalysis[]): MsgFileRole[] {
+  const analysisByFile = new Map(analyses.map((a) => [a.filename, a]));
+  const roles: MsgFileRole[] = [];
+
+  for (const ref of refs) {
+    const a = analysisByFile.get(ref.filename);
+    if (!a) continue;
+
+    let hasSend = false;
+    let hasRecv = false;
+    for (const ipcCall of a.ipc) {
+      const name = ipcCall.detail.split('(')[0].trim().toLowerCase();
+      if (SEND_CALLS.has(name)) hasSend = true;
+      if (RECV_CALLS.has(name)) hasRecv = true;
+    }
+
+    if (hasSend && hasRecv) roles.push({ filename: ref.filename, role: 'both' });
+    else if (hasSend)        roles.push({ filename: ref.filename, role: 'producer' });
+    else if (hasRecv)        roles.push({ filename: ref.filename, role: 'consumer' });
+    // files that reference the constant but have no send/recv are omitted
+  }
+
+  return roles;
+}
+
 export function extractMessageInterfaces(
   analyses: FileAnalysis[],
   typeDict: TypeDict,
@@ -156,8 +186,9 @@ export function extractMessageInterfaces(
     const allRefs = filesUsingConstant(def.name, analyses, sourceFiles);
     const usedIn = allRefs.filter((r) => r.filename !== def.sourceFile);
 
-    // Step 3: direction inference uses the ref set to find relevant IPC calls
+    // Step 3: direction inference + per-file roles
     const { direction, confident, transport } = inferDirection(allRefs, analyses);
+    const fileRoles = computeFileRoles(allRefs, analyses);
 
     return {
       msgTypeConstant: def.name,
@@ -169,6 +200,7 @@ export function extractMessageInterfaces(
       transport,
       definedIn: def.sourceFile,
       usedIn,
+      fileRoles,
     };
   });
 }
