@@ -23,7 +23,7 @@ export default function FileList({ entries, zone, onRemove }: FileListProps) {
   if (zoneEntries.length === 0) return null;
 
   return (
-    <div className="mt-2 space-y-1">
+    <div className="mt-2 max-h-48 overflow-y-auto space-y-1 pr-1">
       {zoneEntries.map((entry) => {
         const { file, shadowedBy } = entry;
         const isShadowed = Boolean(shadowedBy);

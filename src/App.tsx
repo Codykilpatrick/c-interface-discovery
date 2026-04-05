@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { initParser, analyzeString, FileRegistry, ingestFiles } from './analyzer';
 import { PatternRegistry } from './analyzer/patternRegistry';
+import { saveFiles, loadFiles, clearFiles } from './utils/persistence';
 import type { CustomPattern, FileAnalysis, FileRegistryEntry, FileZone, StringAnalysis } from './analyzer/types';
 import DropZone from './components/DropZone';
 import FileList from './components/FileList';
@@ -30,28 +31,21 @@ export default function App() {
   const [allEntries, setAllEntries] = useState<FileRegistryEntry[]>([]);
   const [patterns, setPatterns] = useState<CustomPattern[]>([]);
   const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map());
+  const [patternPrefill, setPatternPrefill] = useState<string | undefined>();
 
-  // Use a ref to prevent concurrent analyses
+  // Ref mirrors parserReady so callbacks always see current value without stale closure
+  const parserReadyRef = useRef(false);
   const analyzeInFlight = useRef(false);
 
-  // Initialize tree-sitter parser on mount
-  useEffect(() => {
-    initParser()
-      .then(() => setParserReady(true))
-      .catch((e) => setParserError(String(e)));
-  }, []);
-
   const runAnalysis = useCallback(async () => {
-    if (!parserReady || analyzeInFlight.current) return;
+    if (!parserReadyRef.current || analyzeInFlight.current) return;
     analyzeInFlight.current = true;
     setAnalyzing(true);
     try {
       const result = await analyzeString(fileRegistry, patternRegistry.getAll());
       setAnalysis(result);
-      // Update match counts for pattern registry UI
       const sourcetexts = fileRegistry.getSources().map((f) => f.content);
       setMatchCounts(patternRegistry.countMatches(sourcetexts));
-      // Default to first source file if none selected
       setActiveFile((prev) => {
         if (prev && result.files.some((f) => f.filename === prev)) return prev;
         return result.files[0]?.filename ?? null;
@@ -62,19 +56,61 @@ export default function App() {
       analyzeInFlight.current = false;
       setAnalyzing(false);
     }
-  }, [parserReady]);
+  }, []);
+
+  // Initialize parser and restore persisted files on mount
+  useEffect(() => {
+    initParser()
+      .then(async () => {
+        parserReadyRef.current = true;
+        setParserReady(true);
+        try {
+          const saved = await loadFiles();
+          if (saved.length > 0) {
+            fileRegistry.addFiles(saved);
+            setAllEntries(fileRegistry.getAllEntries());
+            await runAnalysis();
+          }
+        } catch {
+          // Ignore persistence errors — start fresh
+        }
+      })
+      .catch((e) => setParserError(String(e)));
+  }, [runAnalysis]);
 
   async function handleFiles(files: File[], zone: FileZone) {
     const loaded = await ingestFiles(files, zone);
     fileRegistry.addFiles(loaded);
     setAllEntries(fileRegistry.getAllEntries());
+    saveFiles(fileRegistry.getAll());
     await runAnalysis();
   }
 
   function handleRemove(filename: string, zone: FileZone) {
     fileRegistry.removeFile(filename, zone);
     setAllEntries(fileRegistry.getAllEntries());
+    saveFiles(fileRegistry.getAll());
     runAnalysis();
+  }
+
+  function handleClearZone(zone: FileZone) {
+    const toRemove = fileRegistry.getAllEntries()
+      .filter((e) => e.file.zone === zone)
+      .map((e) => e.file.filename);
+    for (const filename of toRemove) {
+      fileRegistry.removeFile(filename, zone);
+    }
+    setAllEntries(fileRegistry.getAllEntries());
+    saveFiles(fileRegistry.getAll());
+    runAnalysis();
+  }
+
+  async function handleClearSession() {
+    fileRegistry.clear();
+    setAllEntries([]);
+    setAnalysis(null);
+    setActiveFile(null);
+    await clearFiles();
   }
 
   function handleAddPattern(p: Omit<CustomPattern, 'id'>) {
@@ -124,7 +160,6 @@ export default function App() {
     for (const file of analysis.files) {
       lines.push(`FILE: ${file.filename}`);
       lines.push('-'.repeat(60));
-
       if (file.functions.length > 0) {
         lines.push('  FUNCTIONS:');
         for (const fn of file.functions) {
@@ -184,9 +219,11 @@ export default function App() {
     analysis?.files.find((f) => f.filename === activeFile) ?? null;
 
   const allWarnings = [
-    ...(fileRegistry.warnings),
+    ...fileRegistry.warnings,
     ...(analysis?.warnings.filter((w) => w.kind !== 'collision') ?? []),
   ];
+
+  const fileCount = allEntries.filter((e) => !e.file.rejected).length;
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -196,7 +233,15 @@ export default function App() {
           <h1 className="text-lg font-semibold tracking-wide text-gray-100">C Interface Discovery</h1>
           <p className="text-xs text-gray-500 mt-0.5">Static analysis for legacy C messaging interfaces</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {fileCount > 0 && (
+            <button
+              className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-red-900/60 text-gray-500 hover:text-red-300 rounded transition-colors"
+              onClick={handleClearSession}
+            >
+              Clear session
+            </button>
+          )}
           {analysis && (
             <>
               <button
@@ -231,26 +276,33 @@ export default function App() {
 
         {/* Drop zones */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-          <div>
-            <DropZone
-              zone="string"
-              onFiles={(files) => handleFiles(files, 'string')}
-              label="SOURCE FILES"
-              accept=".c,.h,.cpp"
-              description="Drop the source directory here (.c and .h)"
-            />
-            <FileList entries={allEntries} zone="string" onRemove={handleRemove} />
-          </div>
-          <div>
-            <DropZone
-              zone="external"
-              onFiles={(files) => handleFiles(files, 'external')}
-              label="EXTERNAL INCLUDES"
-              accept=".h"
-              description="Drop shared include directory files here (.h only)"
-            />
-            <FileList entries={allEntries} zone="external" onRemove={handleRemove} />
-          </div>
+          {(['string', 'external'] as FileZone[]).map((zone) => {
+            const zoneCount = allEntries.filter((e) => e.file.zone === zone).length;
+            return (
+              <div key={zone}>
+                <DropZone
+                  zone={zone}
+                  onFiles={(files) => handleFiles(files, zone)}
+                  label={zone === 'string' ? 'SOURCE FILES' : 'EXTERNAL INCLUDES'}
+                  accept={zone === 'string' ? '.c,.h,.cpp' : '.h'}
+                  description={zone === 'string'
+                    ? 'Drop the source directory here (.c and .h)'
+                    : 'Drop shared include directory files here (.h only)'}
+                />
+                {zoneCount > 0 && (
+                  <div className="flex justify-end mt-1.5 mb-0.5">
+                    <button
+                      className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                      onClick={() => handleClearZone(zone)}
+                    >
+                      Clear all ({zoneCount})
+                    </button>
+                  </div>
+                )}
+                <FileList entries={allEntries} zone={zone} onRemove={handleRemove} />
+              </div>
+            );
+          })}
         </div>
 
         {/* Analysis section */}
@@ -265,30 +317,50 @@ export default function App() {
 
             {analysis && (
               <>
-                <FileTabs
-                  files={analysis.files}
-                  activeFile={activeFile}
-                  onSelect={setActiveFile}
-                />
-
-                {/* Global messaging section */}
-                <MessagingSection messages={analysis.messageInterfaces} />
-
-                {/* Per-file sections */}
-                {activeFileAnalysis && (
-                  <div className="space-y-2 mt-4">
-                    <FunctionsSection functions={activeFileAnalysis.functions} />
-                    <IpcSection ipc={activeFileAnalysis.ipc} />
-                    <StructsSection structs={activeFileAnalysis.structs} />
-                    <ExternsSection externs={activeFileAnalysis.externs} />
-                    <DefinesSection defines={activeFileAnalysis.defines} />
-                    <UnknownsSection unknownCalls={activeFileAnalysis.unknownCalls} />
-                    <RiskSection risks={activeFileAnalysis.risks} />
+                {/* ── Global: Messaging Interfaces ─────────────────────── */}
+                {analysis.messageInterfaces.length > 0 && (
+                  <div className="mb-8">
+                    <div className="flex items-center gap-3 mb-3">
+                      <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+                        Messaging Interfaces
+                      </h2>
+                      <span className="text-xs text-gray-600">across all files</span>
+                    </div>
+                    <MessagingSection messages={analysis.messageInterfaces} />
                   </div>
                 )}
 
-                {/* Pattern registry */}
-                <div className="mt-6">
+                {/* ── Per-file ──────────────────────────────────────────── */}
+                <div>
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                    Per-file Analysis
+                  </h2>
+                  <FileTabs
+                    files={analysis.files}
+                    activeFile={activeFile}
+                    onSelect={setActiveFile}
+                  />
+                  {activeFileAnalysis && (
+                    <div className="space-y-2 mt-2">
+                      <FunctionsSection functions={activeFileAnalysis.functions} />
+                      <IpcSection ipc={activeFileAnalysis.ipc} />
+                      <StructsSection structs={activeFileAnalysis.structs} />
+                      <ExternsSection externs={activeFileAnalysis.externs} />
+                      <DefinesSection defines={activeFileAnalysis.defines} />
+                      <UnknownsSection
+                      unknownCalls={activeFileAnalysis.unknownCalls}
+                      onAddAsPattern={(fn) => setPatternPrefill(fn)}
+                    />
+                      <RiskSection risks={activeFileAnalysis.risks} />
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Custom patterns ───────────────────────────────────── */}
+                <div className="mt-8 border-t border-gray-800 pt-6">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                    Custom Patterns
+                  </h2>
                   <PatternRegistryUI
                     patterns={patterns}
                     onAdd={handleAddPattern}
@@ -298,6 +370,7 @@ export default function App() {
                     onExport={handleExportPatterns}
                     onReanalyze={runAnalysis}
                     matchCounts={matchCounts}
+                    prefill={patternPrefill}
                   />
                 </div>
               </>

@@ -9,12 +9,14 @@ import type {
   TypeDict,
 } from './types';
 
-/** Default name patterns that indicate a message type constant. */
+/**
+ * Default name patterns that indicate a message type constant.
+ * OP_* and CMD_* are intentionally excluded — they match too broadly
+ * (e.g. MQTT opcode bitmasks). Add them via custom patterns if needed.
+ */
 const MSG_CONSTANT_PATTERNS = [
   /^MSG_TYPE_/,
   /^MSG_ID_/,
-  /^OP_/,
-  /^CMD_/,
   /^PKT_TYPE_/,
   /^OPCODE_/,
 ];

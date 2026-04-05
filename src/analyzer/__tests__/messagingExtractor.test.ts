@@ -42,7 +42,7 @@ describe('messagingExtractor', () => {
     expect(result[0].msgTypeValue).toBe('0x01');
   });
 
-  it('finds CMD_* constants', () => {
+  it('does not match CMD_* by default (too broad)', () => {
     const defines: CDefine[] = [
       { name: 'CMD_FIRE', value: '5', category: 'protocol', sourceFile: 'cmds.h', conditional: false },
     ];
@@ -50,6 +50,19 @@ describe('messagingExtractor', () => {
       [makeAnalysis('main.c')],
       makeTypeDict(defines),
       []
+    );
+    expect(result.some((m) => m.msgTypeConstant === 'CMD_FIRE')).toBe(false);
+  });
+
+  it('matches CMD_* when added as a custom pattern', () => {
+    const defines: CDefine[] = [
+      { name: 'CMD_FIRE', value: '5', category: 'protocol', sourceFile: 'cmds.h', conditional: false },
+    ];
+    const customPatterns = [{ id: '1', name: 'CMD_*', pattern: '^CMD_', ipcType: 'custom' as const, direction: 'bidirectional' as const, notes: '' }];
+    const result = extractMessageInterfaces(
+      [makeAnalysis('main.c')],
+      makeTypeDict(defines),
+      customPatterns
     );
     expect(result.some((m) => m.msgTypeConstant === 'CMD_FIRE')).toBe(true);
   });

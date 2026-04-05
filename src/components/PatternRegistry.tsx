@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { CustomPattern, IpcType } from '../analyzer/types';
 import Accordion from './Accordion';
 
@@ -11,6 +11,8 @@ interface PatternRegistryProps {
   onExport: () => void;
   onReanalyze: () => void;
   matchCounts: Map<string, number>;
+  /** Pre-fill the form with a function name (e.g. from Unknown Calls). */
+  prefill?: string;
 }
 
 const IPC_TYPES: IpcType[] = [
@@ -19,7 +21,31 @@ const IPC_TYPES: IpcType[] = [
   'file-io', 'ioctl', 'custom',
 ];
 
-const EMPTY_FORM = { name: '', pattern: '', ipcType: 'custom' as IpcType, direction: 'bidirectional' as const, notes: '' };
+const EMPTY_FORM: {
+  name: string;
+  fnName: string;
+  pattern: string;
+  ipcType: IpcType;
+  direction: CustomPattern['direction'];
+  notes: string;
+} = {
+  name: '',
+  fnName: '',
+  pattern: '',
+  ipcType: 'custom',
+  direction: 'bidirectional',
+  notes: '',
+};
+
+/** Escape a string for use in a regex. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Generate a regex that matches a C function call by name. */
+function fnNameToRegex(name: string): string {
+  return `${escapeRegex(name.trim())}\\s*\\(`;
+}
 
 export default function PatternRegistry({
   patterns,
@@ -30,11 +56,27 @@ export default function PatternRegistry({
   onExport,
   onReanalyze,
   matchCounts,
+  prefill,
 }: PatternRegistryProps) {
-  const [form, setForm] = useState<Omit<CustomPattern, 'id'>>(EMPTY_FORM);
+  const [mode, setMode] = useState<'simple' | 'advanced'>('simple');
+  const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [regexError, setRegexError] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLDivElement>(null);
+
+  // When a prefill arrives (from Unknown Calls), populate the simple-mode form
+  useEffect(() => {
+    if (!prefill) return;
+    setMode('simple');
+    setEditingId(null);
+    setForm({ ...EMPTY_FORM, name: prefill, fnName: prefill });
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [prefill]);
+
+  const effectivePattern = mode === 'simple'
+    ? fnNameToRegex(form.fnName)
+    : form.pattern;
 
   function validateRegex(pattern: string): boolean {
     try {
@@ -48,21 +90,31 @@ export default function PatternRegistry({
   }
 
   function handleSubmit() {
-    if (!form.name.trim() || !form.pattern.trim()) return;
-    if (!validateRegex(form.pattern)) return;
+    const name = form.name.trim() || form.fnName.trim();
+    if (!name) return;
+    if (!validateRegex(effectivePattern)) return;
+
+    const payload: Omit<CustomPattern, 'id'> = {
+      name,
+      pattern: effectivePattern,
+      ipcType: form.ipcType,
+      direction: form.direction,
+      notes: form.notes,
+    };
 
     if (editingId) {
-      onUpdate(editingId, form);
+      onUpdate(editingId, payload);
       setEditingId(null);
     } else {
-      onAdd(form);
+      onAdd(payload);
     }
     setForm(EMPTY_FORM);
   }
 
   function handleEdit(p: CustomPattern) {
     setEditingId(p.id);
-    setForm({ name: p.name, pattern: p.pattern, ipcType: p.ipcType, direction: p.direction, notes: p.notes });
+    setMode('advanced');
+    setForm({ ...EMPTY_FORM, name: p.name, pattern: p.pattern, ipcType: p.ipcType, direction: p.direction, notes: p.notes });
   }
 
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -81,8 +133,12 @@ export default function PatternRegistry({
     e.target.value = '';
   }
 
+  const canSubmit = mode === 'simple'
+    ? form.fnName.trim().length > 0
+    : form.name.trim().length > 0 && form.pattern.trim().length > 0;
+
   return (
-    <Accordion title="Custom Pattern Registry" count={patterns.length}>
+    <Accordion title="Custom Patterns" count={patterns.length}>
       <div className="mt-3 space-y-4">
         {/* Toolbar */}
         <div className="flex gap-2 flex-wrap">
@@ -140,29 +196,68 @@ export default function PatternRegistry({
         )}
 
         {/* Add / Edit form */}
-        <div className="border border-gray-700 rounded-lg p-3 space-y-2">
-          <div className="text-xs text-gray-500 font-medium mb-1">
-            {editingId ? 'Edit Pattern' : 'Add Pattern'}
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              className="col-span-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"
-              placeholder="Name (e.g. torpedo_dispatch)"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            />
-            <input
-              className="col-span-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 font-mono placeholder-gray-600"
-              placeholder="Regex pattern"
-              value={form.pattern}
-              onChange={(e) => {
-                setForm((f) => ({ ...f, pattern: e.target.value }));
-                if (e.target.value) validateRegex(e.target.value);
-              }}
-            />
-            {regexError && (
-              <div className="col-span-2 text-xs text-red-400">{regexError}</div>
+        <div ref={formRef} className="border border-gray-700 rounded-lg p-3 space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-gray-500 font-medium">
+              {editingId ? 'Edit Pattern' : 'Add Pattern'}
+            </span>
+            {!editingId && (
+              <div className="flex text-xs rounded overflow-hidden border border-gray-700">
+                <button
+                  className={`px-2.5 py-1 transition-colors ${mode === 'simple' ? 'bg-gray-700 text-gray-200' : 'text-gray-500 hover:text-gray-300'}`}
+                  onClick={() => setMode('simple')}
+                >
+                  Simple
+                </button>
+                <button
+                  className={`px-2.5 py-1 transition-colors ${mode === 'advanced' ? 'bg-gray-700 text-gray-200' : 'text-gray-500 hover:text-gray-300'}`}
+                  onClick={() => setMode('advanced')}
+                >
+                  Regex
+                </button>
+              </div>
             )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {mode === 'simple' ? (
+              <>
+                <input
+                  className="col-span-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 font-mono placeholder-gray-600"
+                  placeholder="Function name (e.g. torpedo_dispatch)"
+                  value={form.fnName}
+                  onChange={(e) => setForm((f) => ({ ...f, fnName: e.target.value, name: e.target.value }))}
+                  autoFocus={!!prefill}
+                />
+                {form.fnName.trim() && (
+                  <div className="col-span-2 text-xs text-gray-600 font-mono px-1">
+                    → <span className="text-gray-400">{fnNameToRegex(form.fnName)}</span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <input
+                  className="col-span-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"
+                  placeholder="Name (e.g. torpedo_dispatch)"
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                />
+                <input
+                  className="col-span-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 font-mono placeholder-gray-600"
+                  placeholder="Regex pattern"
+                  value={form.pattern}
+                  onChange={(e) => {
+                    setForm((f) => ({ ...f, pattern: e.target.value }));
+                    if (e.target.value) validateRegex(e.target.value);
+                  }}
+                />
+                {regexError && (
+                  <div className="col-span-2 text-xs text-red-400">{regexError}</div>
+                )}
+              </>
+            )}
+
             <select
               className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
               value={form.ipcType}
@@ -186,11 +281,12 @@ export default function PatternRegistry({
               onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
             />
           </div>
+
           <div className="flex gap-2 pt-1">
             <button
               className="px-3 py-1.5 text-xs bg-blue-800/70 hover:bg-blue-700/70 text-blue-200 rounded transition-colors disabled:opacity-40"
               onClick={handleSubmit}
-              disabled={!form.name.trim() || !form.pattern.trim()}
+              disabled={!canSubmit}
             >
               {editingId ? 'Save' : 'Add'}
             </button>

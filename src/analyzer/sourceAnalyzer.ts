@@ -311,12 +311,16 @@ export async function analyzeSource(
   ]);
   const unknownCalls: string[] = [];
   for (const name of calledNames) {
+    const matchesCustomPattern = patterns.some((p) => {
+      try { return new RegExp(p.pattern).test(`${name}(`); } catch { return false; }
+    });
     if (
       !localFunctionNames.has(name) &&
       !STDLIB_IGNORE.has(name) &&
       !(name in IPC_CALLS) &&
       !knownTypeNames.has(name) &&
-      !RISK_PATTERNS.some((r) => r.test(name))
+      !RISK_PATTERNS.some((r) => r.test(name)) &&
+      !matchesCustomPattern
     ) {
       unknownCalls.push(name);
     }
