@@ -14,7 +14,8 @@ import {
   type EdgeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
+import { useNodesState } from '@xyflow/react';
 import type { IpcType, StringAnalysis } from '../analyzer/types';
 import {
   buildGraph,
@@ -177,7 +178,11 @@ interface InterfaceGraphProps {
 }
 
 export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGraphProps) {
-  const { nodes, edges } = useMemo(() => buildGraph(analysis), [analysis]);
+  const { nodes: initialNodes, edges } = useMemo(() => buildGraph(analysis), [analysis]);
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+
+  // Reset positions when the analysis changes (new files loaded / re-analyzed)
+  useEffect(() => { setNodes(initialNodes); }, [initialNodes, setNodes]);
 
   if (nodes.length === 0) {
     return (
@@ -208,6 +213,7 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
 
       <ReactFlow
         nodes={nodes}
+        onNodesChange={onNodesChange}
         edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
