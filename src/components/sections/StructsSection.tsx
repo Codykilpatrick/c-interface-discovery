@@ -6,6 +6,7 @@ import Accordion from '../Accordion';
 interface StructsSectionProps {
   structs: CStruct[];
   sourceFiles: LoadedFile[];
+  onAddAsMsgStructPattern?: (structName: string) => void;
 }
 
 function RefPanel({ structName, sourceFiles, onClose }: {
@@ -42,7 +43,7 @@ function RefPanel({ structName, sourceFiles, onClose }: {
   );
 }
 
-function StructCard({ s, sourceFiles }: { s: CStruct; sourceFiles: LoadedFile[] }) {
+function StructCard({ s, sourceFiles, onAddAsMsgStructPattern }: { s: CStruct; sourceFiles: LoadedFile[]; onAddAsMsgStructPattern?: (name: string) => void }) {
   const [showRefs, setShowRefs] = useState(false);
 
   return (
@@ -61,6 +62,15 @@ function StructCard({ s, sourceFiles }: { s: CStruct; sourceFiles: LoadedFile[] 
         </span>
         {s.conditional && (
           <span className="text-xs text-yellow-500">⚠ conditional</span>
+        )}
+        {onAddAsMsgStructPattern && (
+          <button
+            className="text-xs text-gray-600 hover:text-blue-400 transition-colors px-1 ml-auto"
+            title={`Add ${s.name} as a message struct pattern`}
+            onClick={() => onAddAsMsgStructPattern(s.name)}
+          >
+            +
+          </button>
         )}
       </div>
       {s.fields.map((f, i) => (
@@ -86,14 +96,14 @@ function StructCard({ s, sourceFiles }: { s: CStruct; sourceFiles: LoadedFile[] 
   );
 }
 
-export default function StructsSection({ structs, sourceFiles }: StructsSectionProps) {
+export default function StructsSection({ structs, sourceFiles, onAddAsMsgStructPattern }: StructsSectionProps) {
   if (structs.length === 0) return null;
 
   return (
     <Accordion title="Structs" count={structs.length}>
       <div className="mt-2 space-y-3">
         {structs.map((s) => (
-          <StructCard key={s.name} s={s} sourceFiles={sourceFiles} />
+          <StructCard key={s.name} s={s} sourceFiles={sourceFiles} onAddAsMsgStructPattern={onAddAsMsgStructPattern} />
         ))}
       </div>
     </Accordion>

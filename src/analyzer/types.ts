@@ -115,6 +115,12 @@ export interface CustomPattern {
   notes: string;
 }
 
+export interface MsgStructPattern {
+  id: string;
+  name: string;    // human label
+  pattern: string; // regex tested against struct names in typeDict
+}
+
 export interface FileAnalysis {
   filename: string;
   role: FileRole;
@@ -140,6 +146,7 @@ export interface StringAnalysis {
   typeDict: TypeDict;            // resolved from all headers + sources
   messageInterfaces: MessageInterface[];
   customPatterns: CustomPattern[];
+  msgStructPatterns: MsgStructPattern[];
   warnings: AnalysisWarning[];   // global warnings shown in banner
 }
 

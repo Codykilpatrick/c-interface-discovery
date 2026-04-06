@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { initParser, analyzeString, FileRegistry, ingestFiles } from './analyzer';
 import { PatternRegistry } from './analyzer/patternRegistry';
+import { MsgStructRegistry } from './analyzer/msgStructRegistry';
 import { saveFiles, loadFiles, clearFiles } from './utils/persistence';
-import type { CustomPattern, FileAnalysis, FileRegistryEntry, FileZone, StringAnalysis } from './analyzer/types';
+import type { CustomPattern, FileAnalysis, FileRegistryEntry, FileZone, MsgStructPattern, StringAnalysis } from './analyzer/types';
 import DropZone from './components/DropZone';
 import FileList from './components/FileList';
 import SummaryBar from './components/SummaryBar';
 import FileTabs from './components/FileTabs';
 import WarningBanner from './components/WarningBanner';
 import PatternRegistryUI from './components/PatternRegistry';
+import MsgStructPatternsUI from './components/MsgStructPatterns';
 import ExternalInterfacesSummary from './components/ExternalInterfacesSummary';
 import InterfaceGraph from './components/InterfaceGraph';
 import FunctionsSection from './components/sections/FunctionsSection';
@@ -22,6 +24,7 @@ import RiskSection from './components/sections/RiskSection';
 // Singletons (not React state — don't need to be reactive)
 const fileRegistry = new FileRegistry();
 const patternRegistry = new PatternRegistry();
+const msgStructRegistry = new MsgStructRegistry();
 
 export default function App() {
   const [parserReady, setParserReady] = useState(false);
@@ -31,8 +34,10 @@ export default function App() {
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [allEntries, setAllEntries] = useState<FileRegistryEntry[]>([]);
   const [patterns, setPatterns] = useState<CustomPattern[]>([]);
+  const [msgStructPatterns, setMsgStructPatterns] = useState<MsgStructPattern[]>(() => msgStructRegistry.getAll());
   const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map());
   const [patternPrefill, setPatternPrefill] = useState<string | undefined>();
+  const [msgStructPrefill, setMsgStructPrefill] = useState<string | undefined>();
   const [view, setView] = useState<'interfaces' | 'graph' | 'per-file'>('interfaces');
 
   // Ref mirrors parserReady so callbacks always see current value without stale closure
@@ -44,7 +49,7 @@ export default function App() {
     analyzeInFlight.current = true;
     setAnalyzing(true);
     try {
-      const result = await analyzeString(fileRegistry, patternRegistry.getAll());
+      const result = await analyzeString(fileRegistry, patternRegistry.getAll(), msgStructRegistry.getAll());
       setAnalysis(result);
       const sourcetexts = fileRegistry.getSources().map((f) => f.content);
       setMatchCounts(patternRegistry.countMatches(sourcetexts));
@@ -133,6 +138,32 @@ export default function App() {
   function handleImportPatterns(imported: CustomPattern[]) {
     patternRegistry.importPatterns(imported);
     setPatterns(patternRegistry.getAll());
+  }
+
+  function handleAddMsgStructPattern(p: Omit<MsgStructPattern, 'id'>) {
+    msgStructRegistry.add(p);
+    setMsgStructPatterns(msgStructRegistry.getAll());
+  }
+
+  function handleRemoveMsgStructPattern(id: string) {
+    msgStructRegistry.remove(id);
+    setMsgStructPatterns(msgStructRegistry.getAll());
+  }
+
+  function handleImportMsgStructPatterns(imported: MsgStructPattern[]) {
+    msgStructRegistry.importPatterns(imported);
+    setMsgStructPatterns(msgStructRegistry.getAll());
+  }
+
+  function handleExportMsgStructPatterns() {
+    const json = msgStructRegistry.exportAsJson();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'cid-msg-struct-patterns.json';
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function handleExportPatterns() {
@@ -381,7 +412,14 @@ export default function App() {
                       <div className="space-y-2 mt-2">
                         <FunctionsSection functions={activeFileAnalysis.functions} />
                         <IpcSection ipc={activeFileAnalysis.ipc} />
-                        <StructsSection structs={activeFileStructs} sourceFiles={fileRegistry.getSources()} />
+                        <StructsSection
+                          structs={activeFileStructs}
+                          sourceFiles={fileRegistry.getSources()}
+                          onAddAsMsgStructPattern={(name) => {
+                            setMsgStructPrefill(name);
+                            setView('interfaces'); // bring patterns into view if on graph/per-file
+                          }}
+                        />
                         <ExternsSection externs={activeFileAnalysis.externs} />
                         <DefinesSection defines={activeFileAnalysis.defines} />
                         <UnknownsSection
@@ -400,17 +438,28 @@ export default function App() {
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
                     Custom Patterns
                   </h2>
-                  <PatternRegistryUI
-                    patterns={patterns}
-                    onAdd={handleAddPattern}
-                    onUpdate={handleUpdatePattern}
-                    onRemove={handleRemovePattern}
-                    onImport={handleImportPatterns}
-                    onExport={handleExportPatterns}
-                    onReanalyze={runAnalysis}
-                    matchCounts={matchCounts}
-                    prefill={patternPrefill}
-                  />
+                  <div className="space-y-2">
+                    <PatternRegistryUI
+                      patterns={patterns}
+                      onAdd={handleAddPattern}
+                      onUpdate={handleUpdatePattern}
+                      onRemove={handleRemovePattern}
+                      onImport={handleImportPatterns}
+                      onExport={handleExportPatterns}
+                      onReanalyze={runAnalysis}
+                      matchCounts={matchCounts}
+                      prefill={patternPrefill}
+                    />
+                    <MsgStructPatternsUI
+                      patterns={msgStructPatterns}
+                      onAdd={handleAddMsgStructPattern}
+                      onRemove={handleRemoveMsgStructPattern}
+                      onImport={handleImportMsgStructPatterns}
+                      onExport={handleExportMsgStructPatterns}
+                      onReanalyze={runAnalysis}
+                      prefill={msgStructPrefill}
+                    />
+                  </div>
                 </div>
               </>
             )}

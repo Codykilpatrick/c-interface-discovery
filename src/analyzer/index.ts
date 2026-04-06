@@ -1,5 +1,5 @@
 import Parser from 'web-tree-sitter';
-import type { CustomPattern, StringAnalysis } from './types';
+import type { CustomPattern, MsgStructPattern, StringAnalysis } from './types';
 import type { FileRegistry } from './fileRegistry';
 import { parseHeaders } from './headerParser';
 import { analyzeSource } from './sourceAnalyzer';
@@ -26,7 +26,8 @@ export async function initParser(): Promise<void> {
  */
 export async function analyzeString(
   registry: FileRegistry,
-  patterns: CustomPattern[]
+  patterns: CustomPattern[],
+  msgStructPatterns: MsgStructPattern[] = []
 ): Promise<StringAnalysis> {
   if (!_parser) {
     throw new Error('Parser not initialized. Call initParser() first.');
@@ -76,13 +77,14 @@ export async function analyzeString(
   }
 
   // Pass 4: Extract messaging interfaces (pass source files for content-based direction inference)
-  const messageInterfaces = extractMessageInterfaces(fileAnalyses, typeDict, patterns, sources);
+  const messageInterfaces = extractMessageInterfaces(fileAnalyses, typeDict, patterns, sources, msgStructPatterns);
 
   return {
     files: fileAnalyses,
     typeDict,
     messageInterfaces,
     customPatterns: patterns,
+    msgStructPatterns,
     warnings,
   };
 }
