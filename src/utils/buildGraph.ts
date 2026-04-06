@@ -11,10 +11,13 @@ export interface ProcessNodeData extends Record<string, unknown> {
   hasUnknown: boolean;
 }
 
+export type EdgeDirection = 'unidirectional' | 'bidirectional' | 'uncertain';
+
 export interface MsgEdgeData extends Record<string, unknown> {
   msgTypes: string[];
   transport: IpcType | null;
   confident: boolean;
+  direction: EdgeDirection;
 }
 
 export type ProcessNode = Node<ProcessNodeData, 'processNode'>;
@@ -115,21 +118,45 @@ export function buildGraph(analysis: StringAnalysis): {
     }
   }
 
-  // ── 4. Assemble ─────────────────────────────────────────────────────────────
+  // ── 4. Collapse reciprocal pairs → bidirectional edges ──────────────────────
+  const dropped = new Set<string>();
+  for (const [key, e] of edgeMap) {
+    const reverseKey = `${e.target}→${e.source}`;
+    if (edgeMap.has(reverseKey) && !dropped.has(reverseKey)) {
+      // Merge reverse edge's msgTypes into this one, then drop the reverse
+      const reverse = edgeMap.get(reverseKey)!;
+      for (const m of reverse.msgTypes) {
+        if (!e.msgTypes.includes(m)) e.msgTypes.push(m);
+      }
+      dropped.add(key); // keep the reverse key, drop this one (arbitrary but consistent)
+    }
+  }
+  for (const key of dropped) edgeMap.delete(key);
+
+  // ── 5. Assemble ─────────────────────────────────────────────────────────────
   const nodes = [...nodeMap.values()];
 
-  const edges: MsgEdge[] = [...edgeMap.entries()].map(([key, e]) => ({
-    id: key,
-    source: e.source,
-    target: e.target,
-    type: 'msgEdge' as const,
-    animated: !e.confident,
-    data: {
-      msgTypes: e.msgTypes,
-      transport: e.transport,
-      confident: e.confident,
-    },
-  }));
+  const edges: MsgEdge[] = [...edgeMap.entries()].map(([key, e]) => {
+    const reverseKey = `${e.target}→${e.source}`;
+    const isBidirectional = dropped.has(reverseKey); // the key we dropped was the pair
+    const direction: EdgeDirection = isBidirectional
+      ? 'bidirectional'
+      : e.confident ? 'unidirectional' : 'uncertain';
+
+    return {
+      id: key,
+      source: e.source,
+      target: e.target,
+      type: 'msgEdge' as const,
+      animated: direction === 'uncertain',
+      data: {
+        msgTypes: e.msgTypes,
+        transport: e.transport,
+        confident: e.confident,
+        direction,
+      },
+    };
+  });
 
   return { nodes, edges };
 }

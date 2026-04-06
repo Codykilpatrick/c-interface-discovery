@@ -3,6 +3,7 @@ import { initParser, analyzeString, FileRegistry, ingestFiles } from './analyzer
 import { PatternRegistry } from './analyzer/patternRegistry';
 import { MsgStructRegistry } from './analyzer/msgStructRegistry';
 import { saveFiles, loadFiles, clearFiles } from './utils/persistence';
+import { findReferences } from './utils/findReferences';
 import type { CustomPattern, FileAnalysis, FileRegistryEntry, FileZone, MsgStructPattern, StringAnalysis } from './analyzer/types';
 import DropZone from './components/DropZone';
 import FileList from './components/FileList';
@@ -153,6 +154,24 @@ export default function App() {
   function handleImportMsgStructPatterns(imported: MsgStructPattern[]) {
     msgStructRegistry.importPatterns(imported);
     setMsgStructPatterns(msgStructRegistry.getAll());
+  }
+
+  function handleDetectMsgStructs(): number {
+    if (!analysis) return 0;
+    const sourceFiles = fileRegistry.getSources();
+    const existingNames = new Set(msgStructPatterns.map((p) => p.name));
+    let added = 0;
+    for (const struct of analysis.typeDict.structs) {
+      if (existingNames.has(struct.name)) continue;
+      const refs = findReferences(struct.name, sourceFiles);
+      if (refs.length >= 2) {
+        msgStructRegistry.add({ name: struct.name, pattern: `^${struct.name}$` });
+        existingNames.add(struct.name);
+        added++;
+      }
+    }
+    if (added > 0) setMsgStructPatterns(msgStructRegistry.getAll());
+    return added;
   }
 
   function handleExportMsgStructPatterns() {
@@ -457,6 +476,7 @@ export default function App() {
                       onImport={handleImportMsgStructPatterns}
                       onExport={handleExportMsgStructPatterns}
                       onReanalyze={runAnalysis}
+                      onDetect={handleDetectMsgStructs}
                       prefill={msgStructPrefill}
                     />
                   </div>

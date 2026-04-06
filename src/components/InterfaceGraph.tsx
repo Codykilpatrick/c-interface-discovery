@@ -18,13 +18,14 @@ import { useMemo, useState } from 'react';
 import type { IpcType, StringAnalysis } from '../analyzer/types';
 import {
   buildGraph,
+  type EdgeDirection,
   type MsgEdge,
   type MsgEdgeData,
   type ProcessNode,
   type ProcessNodeData,
 } from '../utils/buildGraph';
 
-// ── IPC color map ─────────────────────────────────────────────────────────────
+// ── IPC color map (used for node badges only) ─────────────────────────────────
 
 const IPC_COLOR: Partial<Record<IpcType, string>> = {
   'socket':       '#60a5fa',
@@ -47,6 +48,14 @@ const IPC_COLOR: Partial<Record<IpcType, string>> = {
 function ipcColor(type: IpcType | null | undefined): string {
   return (type && IPC_COLOR[type]) ?? '#4b5563';
 }
+
+// ── Edge direction colors ─────────────────────────────────────────────────────
+
+const DIRECTION_COLOR: Record<EdgeDirection, string> = {
+  unidirectional: '#60a5fa',  // blue  — confident send
+  bidirectional:  '#a78bfa',  // purple — both directions
+  uncertain:      '#fbbf24',  // amber  — direction unknown
+};
 
 // ── Custom node ───────────────────────────────────────────────────────────────
 
@@ -100,8 +109,10 @@ function MsgEdgeComponent({
   });
 
   const edgeData = data as MsgEdgeData | undefined;
-  const color = ipcColor(edgeData?.transport);
-  const strokeDash = edgeData?.confident === false ? '6 3' : undefined;
+  const direction = edgeData?.direction ?? 'uncertain';
+  const color = selected ? '#e2e8f0' : DIRECTION_COLOR[direction];
+  const strokeDash = direction === 'uncertain' ? '6 3' : undefined;
+  const markerId = `cid-arrow-${direction}`;
 
   return (
     <>
@@ -109,12 +120,13 @@ function MsgEdgeComponent({
         id={id}
         path={edgePath}
         style={{
-          stroke: selected ? '#60a5fa' : color,
+          stroke: color,
           strokeWidth: selected ? 2 : 1.5,
           strokeDasharray: strokeDash,
-          opacity: 0.8,
+          opacity: 0.85,
         }}
-        markerEnd="url(#cid-arrow)"
+        markerStart={direction === 'bidirectional' ? `url(#${markerId}-start)` : undefined}
+        markerEnd={`url(#${markerId})`}
       />
       <EdgeLabelRenderer>
         <div
@@ -128,7 +140,7 @@ function MsgEdgeComponent({
           {edgeData?.msgTypes && (
             <div
               role="button"
-              style={{ borderColor: color, color }}
+              style={{ borderColor: color, color: color }}
               className="bg-gray-950 border rounded px-1.5 py-0.5 text-[10px] font-mono max-w-36 text-center leading-tight cursor-pointer hover:brightness-125 transition-all select-none"
               onClick={() => setExpanded((v) => !v)}
               title="Click to expand"
@@ -139,12 +151,12 @@ function MsgEdgeComponent({
                 </div>
               ))}
               {!expanded && edgeData.msgTypes.length > 2 && (
-                <div style={{ color: ipcColor(null) }} className="hover:text-gray-400">
+                <div className="text-gray-500 hover:text-gray-400">
                   +{edgeData.msgTypes.length - 2} more
                 </div>
               )}
               {expanded && edgeData.msgTypes.length > 2 && (
-                <div style={{ color: ipcColor(null) }}>▲ collapse</div>
+                <div className="text-gray-500">▲ collapse</div>
               )}
             </div>
           )}
@@ -179,9 +191,18 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
     <div className="w-full h-[520px] rounded-lg overflow-hidden border border-gray-800">
       <svg style={{ position: 'absolute', width: 0, height: 0 }}>
         <defs>
-          <marker id="cid-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <polygon points="0 0, 8 3, 0 6" fill="#4b5563" />
-          </marker>
+          {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
+            <g key={dir}>
+              <marker id={`cid-arrow-${dir}`} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill={color} />
+              </marker>
+              {dir === 'bidirectional' && (
+                <marker id={`cid-arrow-${dir}-start`} markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto">
+                  <polygon points="8 0, 0 3, 8 6" fill={color} />
+                </marker>
+              )}
+            </g>
+          ))}
         </defs>
       </svg>
 

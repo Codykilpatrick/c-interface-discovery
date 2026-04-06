@@ -9,6 +9,8 @@ interface MsgStructPatternsProps {
   onImport: (patterns: MsgStructPattern[]) => void;
   onExport: () => void;
   onReanalyze: () => void;
+  /** Detect structs used across multiple source files and add them in bulk. */
+  onDetect?: () => number;
   /** Pre-fill the form with an exact match for this struct name. */
   prefill?: string;
 }
@@ -22,10 +24,12 @@ export default function MsgStructPatterns({
   onImport,
   onExport,
   onReanalyze,
+  onDetect,
   prefill,
 }: MsgStructPatternsProps) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [regexError, setRegexError] = useState<string | null>(null);
+  const [detectMsg, setDetectMsg] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
 
@@ -90,6 +94,21 @@ export default function MsgStructPatterns({
           >
             ↺ Re-analyze
           </button>
+          {onDetect && (
+            <button
+              className="px-3 py-1.5 text-xs bg-green-900/60 hover:bg-green-800/60 text-green-300 rounded transition-colors"
+              onClick={() => {
+                const added = onDetect();
+                setDetectMsg(added > 0 ? `Added ${added} struct${added !== 1 ? 's' : ''}` : 'No new structs found');
+                setTimeout(() => setDetectMsg(null), 3000);
+              }}
+            >
+              ⊕ Detect from files
+            </button>
+          )}
+          {detectMsg && (
+            <span className="text-xs text-green-400">{detectMsg}</span>
+          )}
           <button
             className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
             onClick={onExport}
