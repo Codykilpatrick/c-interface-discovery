@@ -71,6 +71,8 @@ export interface CDefine {
 export interface IpcCall {
   type: IpcType;
   detail: string;
+  /** Explicit direction from a custom pattern — overrides type-based heuristics. */
+  direction?: 'send' | 'recv' | 'bidirectional';
 }
 
 export interface CodeLine {

@@ -124,14 +124,12 @@ function inferDirection(
 
     for (const ipcCall of a.ipc) {
       const callName = ipcCall.detail.split('(')[0].trim().toLowerCase();
-      if (SEND_CALLS.has(callName) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue') {
-        hasSend = true;
-        transport = ipcCall.type;
-      }
-      if (RECV_CALLS.has(callName) || ipcCall.type === 'socket-recv') {
-        hasRecv = true;
-        transport = transport ?? ipcCall.type;
-      }
+      const isSend = SEND_CALLS.has(callName) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue'
+        || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional';
+      const isRecv = RECV_CALLS.has(callName) || ipcCall.type === 'socket-recv'
+        || ipcCall.direction === 'recv' || ipcCall.direction === 'bidirectional';
+      if (isSend) { hasSend = true; transport = ipcCall.type; }
+      if (isRecv) { hasRecv = true; transport = transport ?? ipcCall.type; }
     }
   }
 
@@ -157,11 +155,13 @@ function computeFileRoles(refs: FileRef[], analyses: FileAnalysis[]): MsgFileRol
     let hasRecv = false;
     for (const ipcCall of a.ipc) {
       const name = ipcCall.detail.split('(')[0].trim().toLowerCase();
-      // Check by call name or by IPC type (catches socket-send/recv even with wrappers)
-      if (SEND_CALLS.has(name) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue') {
+      // Check by call name, IPC type, or explicit direction from custom patterns
+      if (SEND_CALLS.has(name) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue'
+          || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional') {
         hasSend = true;
       }
-      if (RECV_CALLS.has(name) || ipcCall.type === 'socket-recv') {
+      if (RECV_CALLS.has(name) || ipcCall.type === 'socket-recv'
+          || ipcCall.direction === 'recv' || ipcCall.direction === 'bidirectional') {
         hasRecv = true;
       }
     }

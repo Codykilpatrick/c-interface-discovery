@@ -280,6 +280,7 @@ export async function analyzeSource(
         ipc.push({
           type: pattern.ipcType,
           detail: `${pattern.name} (custom pattern, ${matches.length} match${matches.length > 1 ? 'es' : ''})`,
+          direction: pattern.direction,
         });
       }
     } catch {

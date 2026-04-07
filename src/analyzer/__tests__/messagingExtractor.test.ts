@@ -182,7 +182,7 @@ describe('messagingExtractor — struct patterns', () => {
     expect(result).toHaveLength(1);
   });
 
-  it('falls back to role "both" when source file uses a wrapper IPC function (not in SEND/RECV_CALLS)', () => {
+  it('falls back to role "both" when source file uses a wrapper IPC function with no direction info', () => {
     const struct = makeStruct('SONAR_DATA', 'sonar.h');
     const analyses = [
       makeAnalysis('sender.c', [], [{ type: 'custom', detail: 'ipc_dispatch(handle, &msg)' }]),
@@ -201,9 +201,57 @@ describe('messagingExtractor — struct patterns', () => {
     );
     expect(result).toHaveLength(1);
     const roles = result[0].fileRoles;
-    // Both files should be included with role 'both' (indeterminate direction)
+    // Both files should be included with role 'both' (indeterminate — no explicit direction)
     expect(roles).toHaveLength(2);
     expect(roles.every((r) => r.role === 'both')).toBe(true);
+  });
+
+  it('resolves producer role from custom pattern with direction "send"', () => {
+    const struct = makeStruct('SONAR_DATA', 'sonar.h');
+    const analyses = [
+      makeAnalysis('sender.c', [], [{ type: 'custom', detail: 'ipc_dispatch (custom pattern, 1 match)', direction: 'send' }]),
+      makeAnalysis('receiver.c', [], [{ type: 'custom', detail: 'ipc_receive (custom pattern, 1 match)', direction: 'recv' }]),
+    ];
+    const sourceFiles = [
+      makeSourceFile('sender.c', 'SONAR_DATA msg; ipc_dispatch(handle, &msg);'),
+      makeSourceFile('receiver.c', 'SONAR_DATA buf; ipc_receive(handle, &buf);'),
+    ];
+    const result = extractMessageInterfaces(
+      analyses,
+      makeTypeDict([], [struct]),
+      [],
+      sourceFiles,
+      [makeMsgStructPattern('_DATA$')]
+    );
+    expect(result).toHaveLength(1);
+    const roles = result[0].fileRoles;
+    expect(roles.find((r) => r.filename === 'sender.c')?.role).toBe('producer');
+    expect(roles.find((r) => r.filename === 'receiver.c')?.role).toBe('consumer');
+    expect(result[0].directionConfident).toBe(true);
+  });
+
+  it('resolves "both" role from custom pattern with direction "bidirectional"', () => {
+    const struct = makeStruct('SONAR_DATA', 'sonar.h');
+    const analyses = [
+      makeAnalysis('nodeA.c', [], [{ type: 'custom', detail: 'ipc_exchange (custom pattern, 1 match)', direction: 'bidirectional' }]),
+      makeAnalysis('nodeB.c', [], [{ type: 'custom', detail: 'ipc_exchange (custom pattern, 1 match)', direction: 'bidirectional' }]),
+    ];
+    const sourceFiles = [
+      makeSourceFile('nodeA.c', 'SONAR_DATA msg; ipc_exchange(handle, &msg);'),
+      makeSourceFile('nodeB.c', 'SONAR_DATA msg; ipc_exchange(handle, &msg);'),
+    ];
+    const result = extractMessageInterfaces(
+      analyses,
+      makeTypeDict([], [struct]),
+      [],
+      sourceFiles,
+      [makeMsgStructPattern('_DATA$')]
+    );
+    expect(result).toHaveLength(1);
+    const roles = result[0].fileRoles;
+    expect(roles.find((r) => r.filename === 'nodeA.c')?.role).toBe('both');
+    expect(roles.find((r) => r.filename === 'nodeB.c')?.role).toBe('both');
+    expect(result[0].directionConfident).toBe(true);
   });
 
   it('produces single-entry fileRoles when struct is referenced in only one source file', () => {

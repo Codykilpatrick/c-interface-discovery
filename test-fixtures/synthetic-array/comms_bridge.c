@@ -20,6 +20,10 @@
 
 extern int g_running;
 
+/* Custom pub/sub wrappers — implemented in the comms layer (not in this array). */
+extern void comms_dispatch(unsigned int msg_type, const void *data, unsigned int len);
+extern void comms_log_status(unsigned int sensor_id, unsigned int flags, const char *text);
+
 static int       g_listen_fd  = -1;
 static int       g_client_fd  = -1;
 static int       g_shm_id     = -1;
