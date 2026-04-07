@@ -197,11 +197,15 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
   for (const [key, e] of edgeMap) {
     const reverseKey = `${e.target}→${e.source}`;
     if (edgeMap.has(reverseKey) && !dropped.has(reverseKey)) {
-      // Merge reverse edge's msgTypes into this one, then drop the reverse
+      // Merge reverse edge's msgTypes and confidence into this one, then drop the reverse
       const reverse = edgeMap.get(reverseKey)!;
       for (const m of reverse.msgTypes) {
         if (!e.msgTypes.includes(m)) e.msgTypes.push(m);
       }
+      // A collapsed pair is only truly bidirectional if at least one side had
+      // confirmed IPC direction — otherwise both sides were fallback 'both' roles
+      // and the edge should remain uncertain.
+      e.confident = e.confident || reverse.confident;
       dropped.add(key); // keep the reverse key, drop this one (arbitrary but consistent)
     }
   }
@@ -212,7 +216,10 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
 
   const edges: MsgEdge[] = [...edgeMap.entries()].map(([key, e]) => {
     const reverseKey = `${e.target}→${e.source}`;
-    const isBidirectional = dropped.has(reverseKey); // the key we dropped was the pair
+    const wasPair = dropped.has(reverseKey); // the key we dropped was the pair
+    // Only call it bidirectional if confidence was established; otherwise both
+    // sides were fallback 'both' roles (no IPC calls detected) → uncertain.
+    const isBidirectional = wasPair && e.confident;
     const direction: EdgeDirection = isBidirectional
       ? 'bidirectional'
       : e.confident ? 'unidirectional' : 'uncertain';
