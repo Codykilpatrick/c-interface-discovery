@@ -27,6 +27,7 @@ import {
   type MsgEdgeData,
   type ProcessNode,
   type ProcessNodeData,
+  type RankDir,
 } from '../utils/buildGraph';
 
 // ── Selection context ─────────────────────────────────────────────────────────
@@ -235,11 +236,12 @@ interface InterfaceGraphProps {
 }
 
 export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGraphProps) {
-  const { nodes: initialNodes, edges } = useMemo(() => buildGraph(analysis), [analysis]);
+  const [rankdir, setRankdir] = useState<RankDir>('LR');
+  const { nodes: initialNodes, edges } = useMemo(() => buildGraph(analysis, rankdir), [analysis, rankdir]);
   const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNode | ExternalNode>(initialNodes);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  // Reset positions and selection when the analysis changes
+  // Reset positions and selection when the analysis changes or layout direction changes
   useEffect(() => {
     setNodes(initialNodes);
     setSelectedNodeId(null);
@@ -327,9 +329,27 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
             className="!bg-gray-900 !border !border-gray-700 rounded"
           />
 
+          {/* Layout direction toggle */}
+          <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 10 }} className="flex gap-1">
+            {(['LR', 'TB'] as RankDir[]).map((dir) => (
+              <button
+                key={dir}
+                onClick={() => setRankdir(dir)}
+                className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${
+                  rankdir === dir
+                    ? 'bg-blue-900/60 border-blue-600 text-blue-300'
+                    : 'bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                }`}
+                title={dir === 'LR' ? 'Left → Right layout' : 'Top → Bottom layout'}
+              >
+                {dir === 'LR' ? '⇢ LR' : '⇣ TB'}
+              </button>
+            ))}
+          </div>
+
           {/* Legend */}
           <div
-            style={{ position: 'absolute', bottom: 10, left: 10, zIndex: 10 }}
+            style={{ position: 'absolute', top: 10, left: 10, zIndex: 10 }}
             className="bg-gray-900/90 border border-gray-700 rounded px-3 py-2 text-[10px] font-mono space-y-1 pointer-events-none"
           >
             {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (

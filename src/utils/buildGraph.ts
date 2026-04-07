@@ -35,7 +35,9 @@ const NODE_H = 80;
 const EXTERNAL_W = 140;
 const EXTERNAL_H = 60;
 
-export function buildGraph(analysis: StringAnalysis): {
+export type RankDir = 'LR' | 'TB';
+
+export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
   nodes: (ProcessNode | ExternalNode)[];
   edges: MsgEdge[];
 } {
@@ -165,7 +167,7 @@ export function buildGraph(analysis: StringAnalysis): {
   const nodeCount = nodeMap.size;
   const nodesep = nodeCount > 15 ? 40 : 60;
   const ranksep = nodeCount > 15 ? 180 : 140;
-  g.setGraph({ rankdir: 'LR', nodesep, ranksep, align: 'DL' });
+  g.setGraph({ rankdir, nodesep, ranksep, align: 'DL' });
 
   for (const node of nodeMap.values()) {
     const isExternal = node.id === EXTERNAL_NODE_ID;
