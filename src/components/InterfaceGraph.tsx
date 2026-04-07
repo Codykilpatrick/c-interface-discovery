@@ -7,14 +7,14 @@ import {
   Position,
   BaseEdge,
   EdgeLabelRenderer,
-  getBezierPath,
+  getSmoothStepPath,
   type NodeProps,
   type EdgeProps,
   type NodeTypes,
   type EdgeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useContext, createContext } from 'react';
 import { useNodesState } from '@xyflow/react';
 import type { IpcType, StringAnalysis } from '../analyzer/types';
 import {
@@ -28,6 +28,19 @@ import {
   type ProcessNode,
   type ProcessNodeData,
 } from '../utils/buildGraph';
+
+// ── Selection context ─────────────────────────────────────────────────────────
+
+interface GraphSelection {
+  selectedNodeId: string | null;
+  connectedEdgeIds: Set<string>;
+  connectedNodeIds: Set<string>;
+}
+const SelectionContext = createContext<GraphSelection>({
+  selectedNodeId: null,
+  connectedEdgeIds: new Set(),
+  connectedNodeIds: new Set(),
+});
 
 // ── IPC color map (used for node badges only) ─────────────────────────────────
 
@@ -63,14 +76,20 @@ const DIRECTION_COLOR: Record<EdgeDirection, string> = {
 
 // ── Custom node ───────────────────────────────────────────────────────────────
 
-function ProcessNodeComponent({ data, selected }: NodeProps<ProcessNode>) {
+function ProcessNodeComponent({ data, selected, id }: NodeProps<ProcessNode>) {
   const { label, ipcTypes, hasUnknown } = data as ProcessNodeData;
+  const { selectedNodeId, connectedNodeIds } = useContext(SelectionContext);
+  const isSelected = id === selectedNodeId;
+  const isDimmed = selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
   return (
     <div
       className="bg-gray-900 rounded-lg px-3 py-2 w-48 shadow-lg transition-all cursor-pointer group"
-      style={{ border: `2px solid ${selected ? '#60a5fa' : '#374151'}` }}
-      onMouseEnter={(e) => { if (!selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#6b7280'; }}
-      onMouseLeave={(e) => { if (!selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#374151'; }}
+      style={{
+        border: `2px solid ${isSelected ? '#60a5fa' : selected ? '#60a5fa' : '#374151'}`,
+        opacity: isDimmed ? 0.25 : 1,
+      }}
+      onMouseEnter={(e) => { if (!isSelected && !selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#6b7280'; }}
+      onMouseLeave={(e) => { if (!isSelected && !selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#374151'; }}
     >
       <Handle type="target" position={Position.Left}  style={{ background: '#4b5563' }} />
       <Handle type="source" position={Position.Right} style={{ background: '#4b5563' }} />
@@ -102,14 +121,18 @@ function ProcessNodeComponent({ data, selected }: NodeProps<ProcessNode>) {
 
 // ── External phantom node ─────────────────────────────────────────────────────
 
-function ExternalNodeComponent({ selected }: NodeProps<ExternalNode>) {
+function ExternalNodeComponent({ selected, id }: NodeProps<ExternalNode>) {
   const { label } = { label: '? External' } as ExternalNodeData;
+  const { selectedNodeId, connectedNodeIds } = useContext(SelectionContext);
+  const isSelected = id === selectedNodeId;
+  const isDimmed = selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
   return (
     <div
       className="rounded-lg px-3 py-2 w-36 flex flex-col items-center justify-center"
       style={{
-        border: `2px dashed ${selected ? '#94a3b8' : '#4b5563'}`,
+        border: `2px dashed ${selected || isSelected ? '#94a3b8' : '#4b5563'}`,
         background: 'rgba(17,24,39,0.7)',
+        opacity: isDimmed ? 0.25 : 1,
       }}
     >
       <Handle type="target" position={Position.Left}  style={{ background: '#374151' }} />
@@ -127,14 +150,19 @@ function MsgEdgeComponent({
   sourcePosition, targetPosition, data, selected,
 }: EdgeProps<MsgEdge>) {
   const [expanded, setExpanded] = useState(false);
-  const [edgePath, labelX, labelY] = getBezierPath({
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourceX, sourceY, sourcePosition,
     targetX, targetY, targetPosition,
+    borderRadius: 8,
   });
+
+  const { selectedNodeId, connectedEdgeIds } = useContext(SelectionContext);
+  const isHighlighted = selectedNodeId !== null && connectedEdgeIds.has(id);
+  const isDimmed = selectedNodeId !== null && !connectedEdgeIds.has(id);
 
   const edgeData = data as MsgEdgeData | undefined;
   const direction = edgeData?.direction ?? 'uncertain';
-  const color = selected ? '#e2e8f0' : DIRECTION_COLOR[direction];
+  const color = selected || isHighlighted ? '#e2e8f0' : DIRECTION_COLOR[direction];
   const strokeDash = direction === 'uncertain' ? '6 3' : undefined;
   const markerId = `cid-arrow-${direction}`;
 
@@ -145,9 +173,10 @@ function MsgEdgeComponent({
         path={edgePath}
         style={{
           stroke: color,
-          strokeWidth: selected ? 2 : 1.5,
+          strokeWidth: selected || isHighlighted ? 2.5 : 1.5,
           strokeDasharray: strokeDash,
-          opacity: 0.85,
+          opacity: isDimmed ? 0.08 : 0.85,
+          transition: 'opacity 0.15s, stroke-width 0.15s',
         }}
         markerStart={direction === 'bidirectional' ? `url(#${markerId}-start)` : undefined}
         markerEnd={`url(#${markerId})`}
@@ -158,6 +187,8 @@ function MsgEdgeComponent({
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
             pointerEvents: 'all',
+            opacity: isDimmed ? 0.08 : 1,
+            transition: 'opacity 0.15s',
           }}
           className="nodrag nopan"
         >
@@ -206,9 +237,35 @@ interface InterfaceGraphProps {
 export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGraphProps) {
   const { nodes: initialNodes, edges } = useMemo(() => buildGraph(analysis), [analysis]);
   const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNode | ExternalNode>(initialNodes);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  // Reset positions when the analysis changes (new files loaded / re-analyzed)
-  useEffect(() => { setNodes(initialNodes); }, [initialNodes, setNodes]);
+  // Reset positions and selection when the analysis changes
+  useEffect(() => {
+    setNodes(initialNodes);
+    setSelectedNodeId(null);
+  }, [initialNodes, setNodes]);
+
+  // Compute which edges/nodes are connected to the selected node
+  const { connectedEdgeIds, connectedNodeIds } = useMemo<{
+    connectedEdgeIds: Set<string>;
+    connectedNodeIds: Set<string>;
+  }>(() => {
+    if (!selectedNodeId) return { connectedEdgeIds: new Set(), connectedNodeIds: new Set() };
+    const edgeIds = new Set<string>();
+    const nodeIds = new Set<string>();
+    for (const edge of edges) {
+      if (edge.source === selectedNodeId || edge.target === selectedNodeId) {
+        edgeIds.add(edge.id);
+        nodeIds.add(edge.source === selectedNodeId ? edge.target : edge.source);
+      }
+    }
+    return { connectedEdgeIds: edgeIds, connectedNodeIds: nodeIds };
+  }, [selectedNodeId, edges]);
+
+  const selectionCtx = useMemo<GraphSelection>(
+    () => ({ selectedNodeId, connectedEdgeIds, connectedNodeIds }),
+    [selectedNodeId, connectedEdgeIds, connectedNodeIds]
+  );
 
   if (nodes.length === 0) {
     return (
@@ -219,48 +276,72 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
   }
 
   return (
-    <div className="w-full h-[520px] rounded-lg overflow-hidden border border-gray-800">
-      <svg style={{ position: 'absolute', width: 0, height: 0 }}>
-        <defs>
-          {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
-            <g key={dir}>
-              <marker id={`cid-arrow-${dir}`} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                <polygon points="0 0, 8 3, 0 6" fill={color} />
+    <SelectionContext.Provider value={selectionCtx}>
+      <div className="w-full rounded-lg overflow-hidden border border-gray-800" style={{ height: Math.max(520, Math.min(800, nodes.length * 60 + 120)) }}>
+        <ReactFlow
+          nodes={nodes}
+          onNodesChange={onNodesChange}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.25 }}
+          minZoom={0.2}
+          onNodeClick={(_, node) => {
+            const nodeId = node.id;
+            setSelectedNodeId((prev) => prev === nodeId ? null : nodeId);
+            if (nodeId !== EXTERNAL_NODE_ID) {
+              onSelectFile(node.data.filename as string);
+            }
+          }}
+          onPaneClick={() => setSelectedNodeId(null)}
+          colorMode="dark"
+          proOptions={{ hideAttribution: true }}
+        >
+          {/* Arrow marker defs — must live inside ReactFlow's SVG context via a Panel overlay */}
+          <svg style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
+            <defs>
+              {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
+                <g key={dir}>
+                  <marker id={`cid-arrow-${dir}`} markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                    <polygon points="0 0, 8 3, 0 6" fill={color} />
+                  </marker>
+                  {dir === 'bidirectional' && (
+                    <marker id={`cid-arrow-${dir}-start`} markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto-start-reverse">
+                      <polygon points="0 0, 8 3, 0 6" fill={color} />
+                    </marker>
+                  )}
+                </g>
+              ))}
+              <marker id="cid-arrow-highlight" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill="#e2e8f0" />
               </marker>
-              {dir === 'bidirectional' && (
-                <marker id={`cid-arrow-${dir}-start`} markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto">
-                  <polygon points="8 0, 0 3, 8 6" fill={color} />
-                </marker>
-              )}
-            </g>
-          ))}
-        </defs>
-      </svg>
+            </defs>
+          </svg>
 
-      <ReactFlow
-        nodes={nodes}
-        onNodesChange={onNodesChange}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.3}
-        onNodeClick={(_, node) => {
-          if (node.id === EXTERNAL_NODE_ID) return;
-          onSelectFile(node.data.filename as string);
-        }}
-        colorMode="dark"
-        proOptions={{ hideAttribution: true }}
-      >
-        <Background color="#1f2937" gap={20} />
-        <Controls className="[&>button]:bg-gray-800 [&>button]:border-gray-700 [&>button]:text-gray-400" />
-        <MiniMap
-          nodeColor="#374151"
-          maskColor="rgba(3,7,18,0.7)"
-          className="!bg-gray-900 !border !border-gray-700 rounded"
-        />
-      </ReactFlow>
-    </div>
+          <Background color="#1f2937" gap={20} />
+          <Controls className="[&>button]:bg-gray-800 [&>button]:border-gray-700 [&>button]:text-gray-400" />
+          <MiniMap
+            nodeColor="#374151"
+            maskColor="rgba(3,7,18,0.7)"
+            className="!bg-gray-900 !border !border-gray-700 rounded"
+          />
+
+          {/* Legend */}
+          <div
+            style={{ position: 'absolute', bottom: 10, left: 10, zIndex: 10 }}
+            className="bg-gray-900/90 border border-gray-700 rounded px-3 py-2 text-[10px] font-mono space-y-1 pointer-events-none"
+          >
+            {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
+              <div key={dir} className="flex items-center gap-2">
+                <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={color} strokeWidth="2" strokeDasharray={dir === 'uncertain' ? '4 2' : undefined} /></svg>
+                <span style={{ color }}>{dir}</span>
+              </div>
+            ))}
+            <div className="text-gray-600 mt-1">click node to highlight</div>
+          </div>
+        </ReactFlow>
+      </div>
+    </SelectionContext.Provider>
   );
 }

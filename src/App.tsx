@@ -34,7 +34,7 @@ export default function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [allEntries, setAllEntries] = useState<FileRegistryEntry[]>([]);
-  const [patterns, setPatterns] = useState<CustomPattern[]>([]);
+  const [patterns, setPatterns] = useState<CustomPattern[]>(() => patternRegistry.getAll());
   const [msgStructPatterns, setMsgStructPatterns] = useState<MsgStructPattern[]>(() => msgStructRegistry.getAll());
   const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map());
   const [patternPrefill, setPatternPrefill] = useState<string | undefined>();
@@ -115,9 +115,13 @@ export default function App() {
 
   async function handleClearSession() {
     fileRegistry.clear();
+    patternRegistry.clear();
+    msgStructRegistry.clear();
     setAllEntries([]);
     setAnalysis(null);
     setActiveFile(null);
+    setPatterns([]);
+    setMsgStructPatterns([]);
     await clearFiles();
   }
 

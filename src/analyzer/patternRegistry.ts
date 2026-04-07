@@ -61,6 +61,11 @@ export class PatternRegistry {
     this.save();
   }
 
+  clear(): void {
+    this.patterns.clear();
+    this.save();
+  }
+
   /**
    * Merge patterns from JSON import. Deduplicates by name (imported wins
    * only if the name doesn't already exist).

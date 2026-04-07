@@ -60,6 +60,11 @@ export class MsgStructRegistry {
     this.save();
   }
 
+  clear(): void {
+    this.patterns.clear();
+    this.save();
+  }
+
   importPatterns(imported: MsgStructPattern[]): void {
     const existingNames = new Set(this.getAll().map((p) => p.name));
     for (const p of imported) {

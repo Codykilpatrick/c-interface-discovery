@@ -74,7 +74,10 @@ export function buildGraph(analysis: StringAnalysis): {
 
     for (const prod of producers) {
       const node = nodeMap.get(prod.filename);
-      if (node && !node.data.producedMsgs.includes(msg.msgTypeConstant)) {
+      if (
+        node?.type === 'processNode' &&
+        !node.data.producedMsgs.includes(msg.msgTypeConstant)
+      ) {
         node.data.producedMsgs.push(msg.msgTypeConstant);
       }
 
@@ -100,7 +103,10 @@ export function buildGraph(analysis: StringAnalysis): {
 
     for (const cons of consumers) {
       const node = nodeMap.get(cons.filename);
-      if (node && !node.data.consumedMsgs.includes(msg.msgTypeConstant)) {
+      if (
+        node?.type === 'processNode' &&
+        !node.data.consumedMsgs.includes(msg.msgTypeConstant)
+      ) {
         node.data.consumedMsgs.push(msg.msgTypeConstant);
       }
     }
@@ -156,7 +162,10 @@ export function buildGraph(analysis: StringAnalysis): {
   // ── 3. Run dagre layout ─────────────────────────────────────────────────────
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'LR', nodesep: 60, ranksep: 120 });
+  const nodeCount = nodeMap.size;
+  const nodesep = nodeCount > 15 ? 40 : 60;
+  const ranksep = nodeCount > 15 ? 180 : 140;
+  g.setGraph({ rankdir: 'LR', nodesep, ranksep, align: 'DL' });
 
   for (const node of nodeMap.values()) {
     const isExternal = node.id === EXTERNAL_NODE_ID;
