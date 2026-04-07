@@ -80,7 +80,7 @@ export default function MsgStructPatterns({
   const canSubmit = form.name.trim().length > 0 && form.pattern.trim().length > 0;
 
   return (
-    <Accordion title="Message Struct Patterns" count={patterns.length}>
+    <Accordion title="Message Struct Patterns" count={patterns.length} forceOpen={!!prefill}>
       <div className="mt-3 space-y-4">
         <p className="text-xs text-gray-500">
           Match struct names (e.g. <span className="font-mono text-gray-400">_(DATA|PASSBACK)$</span>) to generate graph edges between files that share them.

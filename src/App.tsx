@@ -39,7 +39,7 @@ export default function App() {
   const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map());
   const [patternPrefill, setPatternPrefill] = useState<string | undefined>();
   const [msgStructPrefill, setMsgStructPrefill] = useState<string | undefined>();
-  const [view, setView] = useState<'interfaces' | 'graph' | 'per-file'>('interfaces');
+  const [view, setView] = useState<'interfaces' | 'per-file'>('interfaces');
 
   // Ref mirrors parserReady so callbacks always see current value without stale closure
   const parserReadyRef = useRef(false);
@@ -382,11 +382,21 @@ export default function App() {
 
             {analysis && (
               <>
+                {/* ── Graph (always visible) ────────────────────────────── */}
+                <div className="mb-6">
+                  <InterfaceGraph
+                    analysis={analysis}
+                    onSelectFile={(filename) => {
+                      setActiveFile(filename);
+                      setView('per-file');
+                    }}
+                  />
+                </div>
+
                 {/* ── View tabs ─────────────────────────────────────────── */}
                 <div className="flex gap-1 mb-4 border-b border-gray-800 pb-0">
                   {([
                     { id: 'interfaces', label: 'Interfaces' },
-                    { id: 'graph',      label: 'Graph' },
                     { id: 'per-file',   label: 'Per-file' },
                   ] as const).map((tab) => (
                     <button
@@ -408,17 +418,6 @@ export default function App() {
                   <ExternalInterfacesSummary analysis={analysis} sourceFiles={fileRegistry.getSources()} />
                 )}
 
-                {/* ── Graph tab ─────────────────────────────────────────── */}
-                {view === 'graph' && (
-                  <InterfaceGraph
-                    analysis={analysis}
-                    onSelectFile={(filename) => {
-                      setActiveFile(filename);
-                      setView('per-file');
-                    }}
-                  />
-                )}
-
                 {/* ── Per-file tab ──────────────────────────────────────── */}
                 {view === 'per-file' && (
                   <div>
@@ -434,10 +433,7 @@ export default function App() {
                         <StructsSection
                           structs={activeFileStructs}
                           sourceFiles={fileRegistry.getSources()}
-                          onAddAsMsgStructPattern={(name) => {
-                            setMsgStructPrefill(name);
-                            setView('interfaces'); // bring patterns into view if on graph/per-file
-                          }}
+                          onAddAsMsgStructPattern={(name) => setMsgStructPrefill(name)}
                         />
                         <ExternsSection externs={activeFileAnalysis.externs} />
                         <DefinesSection defines={activeFileAnalysis.defines} />

@@ -138,7 +138,7 @@ export default function PatternRegistry({
     : form.name.trim().length > 0 && form.pattern.trim().length > 0;
 
   return (
-    <Accordion title="Custom Patterns" count={patterns.length}>
+    <Accordion title="Custom Patterns" count={patterns.length} forceOpen={!!prefill}>
       <div className="mt-3 space-y-4">
         {/* Toolbar */}
         <div className="flex gap-2 flex-wrap">

@@ -1,14 +1,20 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface AccordionProps {
   title: string;
   count?: number;
   defaultOpen?: boolean;
+  /** When this flips to true, force the accordion open (e.g. when a prefill arrives). */
+  forceOpen?: boolean;
   children: React.ReactNode;
 }
 
-export default function Accordion({ title, count, defaultOpen = false, children }: AccordionProps) {
+export default function Accordion({ title, count, defaultOpen = false, forceOpen, children }: AccordionProps) {
   const [open, setOpen] = useState(defaultOpen);
+
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
   return (
     <div className="border border-gray-800 rounded-lg mb-2">
       <button

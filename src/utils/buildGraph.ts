@@ -23,15 +23,24 @@ export interface MsgEdgeData extends Record<string, unknown> {
 export type ProcessNode = Node<ProcessNodeData, 'processNode'>;
 export type MsgEdge    = Edge<MsgEdgeData,    'msgEdge'>;
 
+export const EXTERNAL_NODE_ID = '__external__';
+
+export interface ExternalNodeData extends Record<string, unknown> {
+  label: string;
+}
+export type ExternalNode = Node<ExternalNodeData, 'externalNode'>;
+
 const NODE_W = 200;
 const NODE_H = 80;
+const EXTERNAL_W = 140;
+const EXTERNAL_H = 60;
 
 export function buildGraph(analysis: StringAnalysis): {
-  nodes: ProcessNode[];
+  nodes: (ProcessNode | ExternalNode)[];
   edges: MsgEdge[];
 } {
   // ── 1. Build node map ───────────────────────────────────────────────────────
-  const nodeMap = new Map<string, ProcessNode>();
+  const nodeMap = new Map<string, ProcessNode | ExternalNode>();
 
   for (const fa of analysis.files) {
     const ipcTypes = [...new Set(fa.ipc.map((c) => c.type))];
@@ -97,13 +106,64 @@ export function buildGraph(analysis: StringAnalysis): {
     }
   }
 
+  // ── 2b. Phantom edges for one-sided messages ────────────────────────────────
+  let needsPhantom = false;
+
+  for (const msg of analysis.messageInterfaces) {
+    const producers = msg.fileRoles.filter((r) => r.role === 'producer' || r.role === 'both');
+    const consumers = msg.fileRoles.filter((r) => r.role === 'consumer' || r.role === 'both');
+
+    // Skip messages with no roles at all — not referenced in any loaded file
+    if (producers.length === 0 && consumers.length === 0) continue;
+
+    const addPhantomEdge = (source: string, target: string) => {
+      const key = `${source}→${target}`;
+      const existing = edgeMap.get(key);
+      if (existing) {
+        if (!existing.msgTypes.includes(msg.msgTypeConstant)) {
+          existing.msgTypes.push(msg.msgTypeConstant);
+        }
+      } else {
+        needsPhantom = true;
+        edgeMap.set(key, {
+          source,
+          target,
+          msgTypes: [msg.msgTypeConstant],
+          transport: msg.transport,
+          confident: false, // direction to/from external is always uncertain
+        });
+      }
+    };
+
+    if (producers.length > 0 && consumers.length === 0) {
+      for (const prod of producers) addPhantomEdge(prod.filename, EXTERNAL_NODE_ID);
+    }
+
+    if (consumers.length > 0 && producers.length === 0) {
+      for (const cons of consumers) addPhantomEdge(EXTERNAL_NODE_ID, cons.filename);
+    }
+  }
+
+  if (needsPhantom) {
+    nodeMap.set(EXTERNAL_NODE_ID, {
+      id: EXTERNAL_NODE_ID,
+      type: 'externalNode',
+      position: { x: 0, y: 0 },
+      data: { label: '? External' },
+    });
+  }
+
   // ── 3. Run dagre layout ─────────────────────────────────────────────────────
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: 'LR', nodesep: 60, ranksep: 120 });
 
   for (const node of nodeMap.values()) {
-    g.setNode(node.id, { width: NODE_W, height: NODE_H });
+    const isExternal = node.id === EXTERNAL_NODE_ID;
+    g.setNode(node.id, {
+      width:  isExternal ? EXTERNAL_W : NODE_W,
+      height: isExternal ? EXTERNAL_H : NODE_H,
+    });
   }
   for (const e of edgeMap.values()) {
     g.setEdge(e.source, e.target);
@@ -114,7 +174,10 @@ export function buildGraph(analysis: StringAnalysis): {
   for (const node of nodeMap.values()) {
     const pos = g.node(node.id);
     if (pos) {
-      node.position = { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 };
+      const isExternal = node.id === EXTERNAL_NODE_ID;
+      const w = isExternal ? EXTERNAL_W : NODE_W;
+      const h = isExternal ? EXTERNAL_H : NODE_H;
+      node.position = { x: pos.x - w / 2, y: pos.y - h / 2 };
     }
   }
 

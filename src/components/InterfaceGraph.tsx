@@ -19,7 +19,10 @@ import { useNodesState } from '@xyflow/react';
 import type { IpcType, StringAnalysis } from '../analyzer/types';
 import {
   buildGraph,
+  EXTERNAL_NODE_ID,
   type EdgeDirection,
+  type ExternalNode,
+  type ExternalNodeData,
   type MsgEdge,
   type MsgEdgeData,
   type ProcessNode,
@@ -97,6 +100,26 @@ function ProcessNodeComponent({ data, selected }: NodeProps<ProcessNode>) {
   );
 }
 
+// ── External phantom node ─────────────────────────────────────────────────────
+
+function ExternalNodeComponent({ selected }: NodeProps<ExternalNode>) {
+  const { label } = { label: '? External' } as ExternalNodeData;
+  return (
+    <div
+      className="rounded-lg px-3 py-2 w-36 flex flex-col items-center justify-center"
+      style={{
+        border: `2px dashed ${selected ? '#94a3b8' : '#4b5563'}`,
+        background: 'rgba(17,24,39,0.7)',
+      }}
+    >
+      <Handle type="target" position={Position.Left}  style={{ background: '#374151' }} />
+      <Handle type="source" position={Position.Right} style={{ background: '#374151' }} />
+      <div className="text-2xl text-gray-600 leading-none mb-1">?</div>
+      <div className="text-xs text-gray-500 font-mono">{label}</div>
+    </div>
+  );
+}
+
 // ── Custom edge ───────────────────────────────────────────────────────────────
 
 function MsgEdgeComponent({
@@ -167,7 +190,10 @@ function MsgEdgeComponent({
   );
 }
 
-const nodeTypes: NodeTypes = { processNode: ProcessNodeComponent };
+const nodeTypes: NodeTypes = {
+  processNode:  ProcessNodeComponent,
+  externalNode: ExternalNodeComponent,
+};
 const edgeTypes: EdgeTypes = { msgEdge: MsgEdgeComponent };
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -179,7 +205,7 @@ interface InterfaceGraphProps {
 
 export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGraphProps) {
   const { nodes: initialNodes, edges } = useMemo(() => buildGraph(analysis), [analysis]);
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNode | ExternalNode>(initialNodes);
 
   // Reset positions when the analysis changes (new files loaded / re-analyzed)
   useEffect(() => { setNodes(initialNodes); }, [initialNodes, setNodes]);
@@ -220,7 +246,10 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.3}
-        onNodeClick={(_, node) => onSelectFile(node.data.filename as string)}
+        onNodeClick={(_, node) => {
+          if (node.id === EXTERNAL_NODE_ID) return;
+          onSelectFile(node.data.filename as string);
+        }}
         colorMode="dark"
         proOptions={{ hideAttribution: true }}
       >

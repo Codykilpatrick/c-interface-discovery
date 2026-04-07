@@ -8,9 +8,10 @@
 
 #define MSG_TYPE_ACOUSTIC    0x01
 #define MSG_TYPE_STATUS      0x02
-#define MSG_TYPE_COMMAND     0x03
+#define MSG_TYPE_COMMAND     0x03  /* produced by external command console — no sender in this array */
 #define MSG_TYPE_ALARM       0x04
 #define MSG_TYPE_HEARTBEAT   0x05
+#define MSG_TYPE_SOLUTION    0x06  /* produced by fire_control — consumed by external weapons net */
 
 #define MAX_PAYLOAD_LEN      512
 #define MAX_SAMPLE_POINTS    256
@@ -55,6 +56,19 @@ typedef struct {
     unsigned int    severity;
     char            description[128];
 } AlarmMsg;
+
+/*
+ * SolutionMsg — fire control solution computed from acoustic data.
+ * Sent by fire_control to the external weapons network.
+ * No consumer exists within this source array.
+ */
+typedef struct {
+    MsgHeader       header;
+    unsigned int    target_bearing;   /* degrees */
+    unsigned int    target_range;     /* meters  */
+    float           confidence;       /* 0.0 – 1.0 */
+    unsigned int    solution_flags;
+} SolutionMsg;
 
 typedef enum {
     SENSOR_OK      = 0,

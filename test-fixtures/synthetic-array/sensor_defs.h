@@ -41,4 +41,7 @@ typedef struct {
     SensorConfig    config;
 } SensorState;
 
+/* Cross-process supervisor API — implemented in signal_handler.c */
+void supervisor_send_reload(void);
+
 #endif /* SENSOR_DEFS_H */
