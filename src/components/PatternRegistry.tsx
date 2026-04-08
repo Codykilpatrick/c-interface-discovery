@@ -28,6 +28,8 @@ const EMPTY_FORM: {
   ipcType: IpcType;
   direction: CustomPattern['direction'];
   notes: string;
+  isExternal: boolean;
+  externalName: string;
 } = {
   name: '',
   fnName: '',
@@ -35,6 +37,8 @@ const EMPTY_FORM: {
   ipcType: 'custom',
   direction: 'bidirectional',
   notes: '',
+  isExternal: false,
+  externalName: '',
 };
 
 /** Escape a string for use in a regex. */
@@ -100,6 +104,8 @@ export default function PatternRegistry({
       ipcType: form.ipcType,
       direction: form.direction,
       notes: form.notes,
+      isExternal: form.isExternal,
+      externalName: form.isExternal ? form.externalName.trim() : undefined,
     };
 
     if (editingId) {
@@ -114,7 +120,7 @@ export default function PatternRegistry({
   function handleEdit(p: CustomPattern) {
     setEditingId(p.id);
     setMode('advanced');
-    setForm({ ...EMPTY_FORM, name: p.name, pattern: p.pattern, ipcType: p.ipcType, direction: p.direction, notes: p.notes });
+    setForm({ ...EMPTY_FORM, name: p.name, pattern: p.pattern, ipcType: p.ipcType, direction: p.direction, notes: p.notes, isExternal: p.isExternal ?? false, externalName: p.externalName ?? '' });
   }
 
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -280,6 +286,23 @@ export default function PatternRegistry({
               value={form.notes}
               onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
             />
+            <label className="col-span-2 flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                className="accent-blue-500"
+                checked={form.isExternal}
+                onChange={(e) => setForm((f) => ({ ...f, isExternal: e.target.checked }))}
+              />
+              <span className="text-xs text-gray-300">Always draw to external node</span>
+            </label>
+            {form.isExternal && (
+              <input
+                className="col-span-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"
+                placeholder="External system name (e.g. Hydra) — leave blank for per-file node"
+                value={form.externalName}
+                onChange={(e) => setForm((f) => ({ ...f, externalName: e.target.value }))}
+              />
+            )}
           </div>
 
           <div className="flex gap-2 pt-1">

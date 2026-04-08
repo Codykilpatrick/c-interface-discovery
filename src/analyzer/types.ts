@@ -73,6 +73,10 @@ export interface IpcCall {
   detail: string;
   /** Explicit direction from a custom pattern — overrides type-based heuristics. */
   direction?: 'send' | 'recv' | 'bidirectional';
+  /** If true, always draw an edge to an external node regardless of other edges. */
+  isExternal?: boolean;
+  /** Name of the external system — shared across patterns with the same name. */
+  externalName?: string;
 }
 
 export interface CodeLine {
@@ -115,6 +119,10 @@ export interface CustomPattern {
   ipcType: IpcType;
   direction: 'send' | 'recv' | 'bidirectional';
   notes: string;
+  /** Always draw an edge to an external node when this pattern matches. */
+  isExternal?: boolean;
+  /** Name of the external system (e.g. "Hydra"). Patterns sharing a name share a node. */
+  externalName?: string;
 }
 
 export interface MsgStructPattern {

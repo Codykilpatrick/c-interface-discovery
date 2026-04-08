@@ -80,4 +80,31 @@ export class MsgStructRegistry {
   exportAsJson(): string {
     return JSON.stringify(this.getAll(), null, 2);
   }
+
+  /**
+   * Count how many times each pattern's matching structs appear in source files.
+   * For each pattern: find struct names it matches, then count references in source texts.
+   * Returns a Map<patternId, count>.
+   */
+  countMatches(structNames: string[], sourceTexts: string[]): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const pattern of this.getAll()) {
+      let total = 0;
+      try {
+        const re = new RegExp(pattern.pattern);
+        const matched = structNames.filter((n) => re.test(n));
+        for (const name of matched) {
+          const nameRe = new RegExp(`\\b${name}\\b`, 'g');
+          for (const text of sourceTexts) {
+            const m = text.match(nameRe);
+            if (m) total += m.length;
+          }
+        }
+      } catch {
+        // invalid regex — leave count at 0
+      }
+      counts.set(pattern.id, total);
+    }
+    return counts;
+  }
 }

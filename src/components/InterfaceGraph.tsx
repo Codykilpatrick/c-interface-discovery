@@ -22,7 +22,6 @@ import {
   EXTERNAL_NODE_ID,
   type EdgeDirection,
   type ExternalNode,
-  type ExternalNodeData,
   type MsgEdge,
   type MsgEdgeData,
   type ProcessNode,
@@ -122,11 +121,11 @@ function ProcessNodeComponent({ data, selected, id }: NodeProps<ProcessNode>) {
 
 // ── External phantom node ─────────────────────────────────────────────────────
 
-function ExternalNodeComponent({ selected, id }: NodeProps<ExternalNode>) {
-  const { label } = { label: '? External' } as ExternalNodeData;
+function ExternalNodeComponent({ selected, id, data }: NodeProps<ExternalNode>) {
   const { selectedNodeId, connectedNodeIds } = useContext(SelectionContext);
   const isSelected = id === selectedNodeId;
   const isDimmed = selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
+  const isNamed = data.label !== '? External';
   return (
     <div
       className="rounded-lg px-3 py-2 w-36 flex flex-col items-center justify-center"
@@ -138,8 +137,13 @@ function ExternalNodeComponent({ selected, id }: NodeProps<ExternalNode>) {
     >
       <Handle type="target" position={Position.Left}  style={{ background: '#374151' }} />
       <Handle type="source" position={Position.Right} style={{ background: '#374151' }} />
-      <div className="text-2xl text-gray-600 leading-none mb-1">?</div>
-      <div className="text-xs text-gray-500 font-mono">{label}</div>
+      {isNamed
+        ? <div className="text-xs text-gray-300 font-mono text-center break-all">{data.label}</div>
+        : <>
+            <div className="text-2xl text-gray-600 leading-none mb-1">?</div>
+            <div className="text-xs text-gray-500 font-mono">{data.label}</div>
+          </>
+      }
     </div>
   );
 }

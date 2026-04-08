@@ -152,6 +152,82 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
     }
   }
 
+  // ── 2c. IPC-only phantom edges ───────────────────────────────────────────────
+  const SEND_CALL_NAMES = new Set(['send', 'sendto', 'write', 'mq_send', 'fwrite']);
+  const RECV_CALL_NAMES = new Set(['recv', 'recvfrom', 'read', 'mq_receive', 'fread']);
+
+  function ipcIsSend(ipcCall: { detail: string; type: IpcType; direction?: string }): boolean {
+    const callName = ipcCall.detail.split('(')[0].trim().toLowerCase();
+    return SEND_CALL_NAMES.has(callName) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue'
+      || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional';
+  }
+
+  function ipcIsRecv(ipcCall: { detail: string; type: IpcType; direction?: string }): boolean {
+    const callName = ipcCall.detail.split('(')[0].trim().toLowerCase();
+    return RECV_CALL_NAMES.has(callName) || ipcCall.type === 'socket-recv'
+      || ipcCall.direction === 'recv' || ipcCall.direction === 'bidirectional';
+  }
+
+  function addExternalEdge(source: string, target: string, transport: IpcType | null, confident: boolean) {
+    const key = `${source}→${target}`;
+    if (!edgeMap.has(key)) {
+      edgeMap.set(key, { source, target, msgTypes: [], transport, confident });
+    }
+  }
+
+  for (const fa of analysis.files) {
+    // Pass 1: isExternal calls — always create edges to named or per-file external nodes.
+    // Named patterns (externalName set) share a node across all files using that name.
+    // Unnamed patterns get a node per file so unrelated externals aren't conflated.
+    for (const ipcCall of fa.ipc) {
+      if (!ipcCall.isExternal) continue;
+
+      const label = ipcCall.externalName?.trim() || '? External';
+      const normalizedName = ipcCall.externalName?.trim()
+        ? ipcCall.externalName.trim().toLowerCase().replace(/\W+/g, '_')
+        : `file__${fa.filename}`;
+      const nodeId = `__external__${normalizedName}`;
+
+      if (!nodeMap.has(nodeId)) {
+        nodeMap.set(nodeId, {
+          id: nodeId,
+          type: 'externalNode',
+          position: { x: 0, y: 0 },
+          data: { label },
+        });
+      }
+
+      if (ipcIsSend(ipcCall)) addExternalEdge(fa.filename, nodeId, ipcCall.type, true);
+      if (ipcIsRecv(ipcCall)) addExternalEdge(nodeId, fa.filename, ipcCall.type, true);
+    }
+
+    // Pass 2: standard (non-isExternal) IPC calls — add generic ? External edge only
+    // if the file has no outgoing/incoming edges yet (avoids spurious connections).
+    let hasSend = false;
+    let hasRecv = false;
+    for (const ipcCall of fa.ipc) {
+      if (ipcCall.isExternal) continue;
+      if (ipcIsSend(ipcCall)) hasSend = true;
+      if (ipcIsRecv(ipcCall)) hasRecv = true;
+    }
+
+    if (!hasSend && !hasRecv) continue;
+
+    const hasOutgoing = [...edgeMap.keys()].some((k) => k.startsWith(`${fa.filename}→`));
+    const hasIncoming = [...edgeMap.keys()].some((k) => k.endsWith(`→${fa.filename}`));
+
+    if (hasSend && !hasOutgoing) {
+      needsPhantom = true;
+      addExternalEdge(fa.filename, EXTERNAL_NODE_ID,
+        fa.ipc.find((c) => c.type === 'socket-send' || c.direction === 'send')?.type ?? null, true);
+    }
+    if (hasRecv && !hasIncoming) {
+      needsPhantom = true;
+      addExternalEdge(EXTERNAL_NODE_ID, fa.filename,
+        fa.ipc.find((c) => c.type === 'socket-recv' || c.direction === 'recv')?.type ?? null, true);
+    }
+  }
+
   if (needsPhantom) {
     nodeMap.set(EXTERNAL_NODE_ID, {
       id: EXTERNAL_NODE_ID,

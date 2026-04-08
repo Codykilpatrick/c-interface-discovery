@@ -13,6 +13,8 @@ interface MsgStructPatternsProps {
   onDetect?: () => number;
   /** Pre-fill the form with an exact match for this struct name. */
   prefill?: string;
+  /** Number of typeDict structs matched per pattern id. */
+  matchCounts?: Map<string, number>;
 }
 
 const EMPTY_FORM = { name: '', pattern: '' };
@@ -26,6 +28,7 @@ export default function MsgStructPatterns({
   onReanalyze,
   onDetect,
   prefill,
+  matchCounts,
 }: MsgStructPatternsProps) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [regexError, setRegexError] = useState<string | null>(null);
@@ -128,18 +131,24 @@ export default function MsgStructPatterns({
         {/* Pattern list */}
         {patterns.length > 0 && (
           <div className="space-y-1">
-            {patterns.map((p) => (
-              <div key={p.id} className="flex items-center gap-3 px-3 py-2 bg-gray-800/60 rounded text-sm">
-                <span className="flex-1 font-mono text-gray-300 truncate">{p.name}</span>
-                <span className="font-mono text-xs text-gray-500 truncate max-w-[200px]">{p.pattern}</span>
-                <button
-                  className="shrink-0 text-xs text-gray-500 hover:text-red-400 transition-colors"
-                  onClick={() => onRemove(p.id)}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
+            {patterns.map((p) => {
+              const count = matchCounts?.get(p.id) ?? 0;
+              return (
+                <div key={p.id} className="flex items-center gap-3 px-3 py-2 bg-gray-800/60 rounded text-sm">
+                  <span className="flex-1 font-mono text-gray-300 truncate">{p.name}</span>
+                  <span className="font-mono text-xs text-gray-500 truncate max-w-[200px]">{p.pattern}</span>
+                  <span className={`shrink-0 text-xs font-mono px-1.5 py-0.5 rounded ${count > 0 ? 'bg-blue-900/50 text-blue-300' : 'bg-gray-700/50 text-gray-500'}`}>
+                    {count}
+                  </span>
+                  <button
+                    className="shrink-0 text-xs text-gray-500 hover:text-red-400 transition-colors"
+                    onClick={() => onRemove(p.id)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
 

@@ -281,6 +281,8 @@ export async function analyzeSource(
           type: pattern.ipcType,
           detail: `${pattern.name} (custom pattern, ${matches.length} match${matches.length > 1 ? 'es' : ''})`,
           direction: pattern.direction,
+          isExternal: pattern.isExternal,
+          externalName: pattern.externalName,
         });
       }
     } catch {

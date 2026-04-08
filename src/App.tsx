@@ -37,6 +37,7 @@ export default function App() {
   const [patterns, setPatterns] = useState<CustomPattern[]>(() => patternRegistry.getAll());
   const [msgStructPatterns, setMsgStructPatterns] = useState<MsgStructPattern[]>(() => msgStructRegistry.getAll());
   const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map());
+  const [msgStructMatchCounts, setMsgStructMatchCounts] = useState<Map<string, number>>(new Map());
   const [patternPrefill, setPatternPrefill] = useState<string | undefined>();
   const [msgStructPrefill, setMsgStructPrefill] = useState<string | undefined>();
   const [view, setView] = useState<'interfaces' | 'per-file'>('interfaces');
@@ -54,6 +55,7 @@ export default function App() {
       setAnalysis(result);
       const sourcetexts = fileRegistry.getSources().map((f) => f.content);
       setMatchCounts(patternRegistry.countMatches(sourcetexts));
+      setMsgStructMatchCounts(msgStructRegistry.countMatches(result.typeDict.structs.map((s) => s.name), sourcetexts));
       setActiveFile((prev) => {
         if (prev && result.files.some((f) => f.filename === prev)) return prev;
         return result.files[0]?.filename ?? null;
@@ -478,6 +480,7 @@ export default function App() {
                       onReanalyze={runAnalysis}
                       onDetect={handleDetectMsgStructs}
                       prefill={msgStructPrefill}
+                      matchCounts={msgStructMatchCounts}
                     />
                   </div>
                 </div>
