@@ -165,3 +165,10 @@ export interface AnalysisWarning {
   message: string;
   files: string[];
 }
+
+export interface ApplicationGroup {
+  id: string;
+  name: string;
+  files: LoadedFile[];
+  analysis: StringAnalysis | null;
+}

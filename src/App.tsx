@@ -2,9 +2,20 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { initParser, analyzeString, FileRegistry, ingestFiles } from './analyzer';
 import { PatternRegistry } from './analyzer/patternRegistry';
 import { MsgStructRegistry } from './analyzer/msgStructRegistry';
-import { saveFiles, loadFiles, clearFiles } from './utils/persistence';
+import {
+  saveAppMeta, loadAppMeta, saveSession, loadSession, clearSession,
+} from './utils/persistence';
 import { findReferences } from './utils/findReferences';
-import type { CustomPattern, FileAnalysis, FileRegistryEntry, FileZone, MsgStructPattern, StringAnalysis } from './analyzer/types';
+import type {
+  ApplicationGroup,
+  CustomPattern,
+  FileAnalysis,
+  FileRegistryEntry,
+  LoadedFile,
+  MsgStructPattern,
+  StringAnalysis,
+} from './analyzer/types';
+import AppZone from './components/AppZone';
 import DropZone from './components/DropZone';
 import FileList from './components/FileList';
 import SummaryBar from './components/SummaryBar';
@@ -13,6 +24,7 @@ import WarningBanner from './components/WarningBanner';
 import PatternRegistryUI from './components/PatternRegistry';
 import MsgStructPatternsUI from './components/MsgStructPatterns';
 import ExternalInterfacesSummary from './components/ExternalInterfacesSummary';
+import ApplicationGraph from './components/ApplicationGraph';
 import InterfaceGraph from './components/InterfaceGraph';
 import FunctionsSection from './components/sections/FunctionsSection';
 import IpcSection from './components/sections/IpcSection';
@@ -22,110 +34,279 @@ import DefinesSection from './components/sections/DefinesSection';
 import UnknownsSection from './components/sections/UnknownsSection';
 import RiskSection from './components/sections/RiskSection';
 
-// Singletons (not React state — don't need to be reactive)
-const fileRegistry = new FileRegistry();
+function genId(): string {
+  return Math.random().toString(36).slice(2, 11);
+}
+
+function makeDefaultApp(index: number): ApplicationGroup {
+  return { id: genId(), name: `Application ${index}`, files: [], analysis: null };
+}
+
+// Singletons — not React state
 const patternRegistry = new PatternRegistry();
 const msgStructRegistry = new MsgStructRegistry();
 
 export default function App() {
   const [parserReady, setParserReady] = useState(false);
   const [parserError, setParserError] = useState<string | null>(null);
-  const [analysis, setAnalysis] = useState<StringAnalysis | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
+
+  const [applications, setApplications] = useState<ApplicationGroup[]>([makeDefaultApp(1)]);
+  const [externalFiles, setExternalFiles] = useState<LoadedFile[]>([]);
+  const [externalEntries, setExternalEntries] = useState<FileRegistryEntry[]>([]);
+  const [analyzingApps, setAnalyzingApps] = useState<Set<string>>(new Set());
+
+  // null = app-level view; string = drill-down into that app
+  const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
-  const [allEntries, setAllEntries] = useState<FileRegistryEntry[]>([]);
+  const [view, setView] = useState<'interfaces' | 'per-file'>('interfaces');
+
   const [patterns, setPatterns] = useState<CustomPattern[]>(() => patternRegistry.getAll());
   const [msgStructPatterns, setMsgStructPatterns] = useState<MsgStructPattern[]>(() => msgStructRegistry.getAll());
   const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map());
   const [msgStructMatchCounts, setMsgStructMatchCounts] = useState<Map<string, number>>(new Map());
   const [patternPrefill, setPatternPrefill] = useState<string | undefined>();
   const [msgStructPrefill, setMsgStructPrefill] = useState<string | undefined>();
-  const [view, setView] = useState<'interfaces' | 'per-file'>('interfaces');
 
-  // Ref mirrors parserReady so callbacks always see current value without stale closure
+  // Refs to avoid stale closures
   const parserReadyRef = useRef(false);
-  const analyzeInFlight = useRef(false);
+  const externalRegistryRef = useRef(new FileRegistry());
+  const analyzeInFlightApps = useRef(new Set<string>());
 
-  const runAnalysis = useCallback(async () => {
-    if (!parserReadyRef.current || analyzeInFlight.current) return;
-    analyzeInFlight.current = true;
-    setAnalyzing(true);
+  // ── Core analysis ──────────────────────────────────────────────────────────
+
+  const runAnalysisForApp = useCallback(async (
+    appId: string,
+    appFiles: LoadedFile[],
+    extFiles: LoadedFile[],
+  ): Promise<StringAnalysis | null> => {
+    if (!parserReadyRef.current) return null;
+    if (analyzeInFlightApps.current.has(appId)) return null;
+
+    const hasSources = appFiles.some((f) => /\.(c|cpp)$/i.test(f.filename));
+    if (!hasSources) {
+      setApplications((prev) => prev.map((a) => a.id === appId ? { ...a, analysis: null } : a));
+      return null;
+    }
+
+    analyzeInFlightApps.current.add(appId);
+    setAnalyzingApps((prev) => new Set([...prev, appId]));
+
     try {
-      const result = await analyzeString(fileRegistry, patternRegistry.getAll(), msgStructRegistry.getAll());
-      setAnalysis(result);
-      const sourcetexts = fileRegistry.getSources().map((f) => f.content);
-      setMatchCounts(patternRegistry.countMatches(sourcetexts));
-      setMsgStructMatchCounts(msgStructRegistry.countMatches(result.typeDict.structs.map((s) => s.name), sourcetexts));
-      setActiveFile((prev) => {
-        if (prev && result.files.some((f) => f.filename === prev)) return prev;
-        return result.files[0]?.filename ?? null;
-      });
+      const tempRegistry = new FileRegistry();
+      tempRegistry.addFiles([...appFiles, ...extFiles]);
+      const result = await analyzeString(tempRegistry, patternRegistry.getAll(), msgStructRegistry.getAll());
+
+      setApplications((prev) => prev.map((a) => a.id === appId ? { ...a, analysis: result } : a));
+      return result;
     } catch (e) {
-      console.error('Analysis error:', e);
+      console.error(`Analysis error for app ${appId}:`, e);
+      return null;
     } finally {
-      analyzeInFlight.current = false;
-      setAnalyzing(false);
+      analyzeInFlightApps.current.delete(appId);
+      setAnalyzingApps((prev) => {
+        const next = new Set(prev);
+        next.delete(appId);
+        return next;
+      });
     }
   }, []);
 
-  // Initialize parser and restore persisted files on mount
+  // Update match counts from all apps' source texts
+  function refreshMatchCounts(apps: ApplicationGroup[]) {
+    const allSourceTexts = apps.flatMap((a) =>
+      a.files.filter((f) => /\.(c|cpp)$/i.test(f.filename)).map((f) => f.content)
+    );
+    if (allSourceTexts.length === 0) return;
+    setMatchCounts(patternRegistry.countMatches(allSourceTexts));
+
+    const allStructNames = apps.flatMap((a) => a.analysis?.typeDict.structs.map((s) => s.name) ?? []);
+    setMsgStructMatchCounts(msgStructRegistry.countMatches(allStructNames, allSourceTexts));
+  }
+
+  async function reanalyzeAllApps(currentApps: ApplicationGroup[], extFiles: LoadedFile[]) {
+    const results = await Promise.all(
+      currentApps.map(async (app) => ({
+        id: app.id,
+        result: await runAnalysisForApp(app.id, app.files, extFiles),
+      }))
+    );
+    const appsWithResults = currentApps.map((app) => {
+      const r = results.find((x) => x.id === app.id);
+      return r?.result ? { ...app, analysis: r.result } : app;
+    });
+    refreshMatchCounts(appsWithResults);
+  }
+
+  // ── Initialization & session restore ──────────────────────────────────────
+
   useEffect(() => {
     initParser()
       .then(async () => {
         parserReadyRef.current = true;
         setParserReady(true);
+
         try {
-          const saved = await loadFiles();
-          if (saved.length > 0) {
-            fileRegistry.addFiles(saved);
-            setAllEntries(fileRegistry.getAllEntries());
-            await runAnalysis();
+          const meta = loadAppMeta();
+          const { filesPerApp, externalFiles: savedExtFiles } = await loadSession();
+
+          // Restore external files
+          externalRegistryRef.current.addFiles(savedExtFiles);
+          setExternalFiles(savedExtFiles);
+          setExternalEntries(externalRegistryRef.current.getAllEntries());
+
+          if (meta && meta.length > 0 && filesPerApp.size > 0) {
+            const restoredApps: ApplicationGroup[] = meta.map((m) => ({
+              id: m.id,
+              name: m.name,
+              files: filesPerApp.get(m.id) ?? [],
+              analysis: null,
+            }));
+            setApplications(restoredApps);
+            // Run analysis for all apps with source files
+            await Promise.all(
+              restoredApps.map((app) => runAnalysisForApp(app.id, app.files, savedExtFiles))
+            );
           }
         } catch {
-          // Ignore persistence errors — start fresh
+          // Ignore persistence errors
         }
       })
       .catch((e) => setParserError(String(e)));
-  }, [runAnalysis]);
+  }, [runAnalysisForApp]);
 
-  async function handleFiles(files: File[], zone: FileZone) {
-    const loaded = await ingestFiles(files, zone);
-    fileRegistry.addFiles(loaded);
-    setAllEntries(fileRegistry.getAllEntries());
-    saveFiles(fileRegistry.getAll());
-    await runAnalysis();
+  // ── App management ─────────────────────────────────────────────────────────
+
+  function handleAddApp() {
+    const newApp = makeDefaultApp(applications.length + 1);
+    const updated = [...applications, newApp];
+    setApplications(updated);
+    saveAppMeta(updated.map((a) => ({ id: a.id, name: a.name })));
   }
 
-  function handleRemove(filename: string, zone: FileZone) {
-    fileRegistry.removeFile(filename, zone);
-    setAllEntries(fileRegistry.getAllEntries());
-    saveFiles(fileRegistry.getAll());
-    runAnalysis();
+  function handleRemoveApp(appId: string) {
+    if (applications.length <= 1) return;
+    const updated = applications.filter((a) => a.id !== appId);
+    setApplications(updated);
+    saveAppMeta(updated.map((a) => ({ id: a.id, name: a.name })));
+    saveSession(updated, externalFiles);
+    if (selectedAppId === appId) setSelectedAppId(null);
   }
 
-  function handleClearZone(zone: FileZone) {
-    const toRemove = fileRegistry.getAllEntries()
-      .filter((e) => e.file.zone === zone)
-      .map((e) => e.file.filename);
-    for (const filename of toRemove) {
-      fileRegistry.removeFile(filename, zone);
-    }
-    setAllEntries(fileRegistry.getAllEntries());
-    saveFiles(fileRegistry.getAll());
-    runAnalysis();
+  function handleRenameApp(appId: string, name: string) {
+    const updated = applications.map((a) => a.id === appId ? { ...a, name } : a);
+    setApplications(updated);
+    saveAppMeta(updated.map((a) => ({ id: a.id, name: a.name })));
   }
+
+  // ── App file management ────────────────────────────────────────────────────
+
+  async function handleAppFiles(appId: string, files: File[]) {
+    const loaded = await ingestFiles(files, 'string');
+    const app = applications.find((a) => a.id === appId);
+    if (!app) return;
+
+    const updatedFiles = mergeFiles(app.files, loaded);
+    const updatedApps = applications.map((a) =>
+      a.id === appId ? { ...a, files: updatedFiles } : a
+    );
+    setApplications(updatedApps);
+
+    const extFiles = externalRegistryRef.current.getAll();
+    const result = await runAnalysisForApp(appId, updatedFiles, extFiles);
+    const appsWithResult = updatedApps.map((a) =>
+      a.id === appId && result ? { ...a, analysis: result } : a
+    );
+    refreshMatchCounts(appsWithResult);
+    saveSession(updatedApps, extFiles);
+    saveAppMeta(updatedApps.map((a) => ({ id: a.id, name: a.name })));
+  }
+
+  async function handleRemoveAppFile(appId: string, filename: string) {
+    const app = applications.find((a) => a.id === appId);
+    if (!app) return;
+
+    const updatedFiles = app.files.filter((f) => f.filename !== filename);
+    const updatedApps = applications.map((a) =>
+      a.id === appId ? { ...a, files: updatedFiles } : a
+    );
+    setApplications(updatedApps);
+
+    const extFiles = externalRegistryRef.current.getAll();
+    await runAnalysisForApp(appId, updatedFiles, extFiles);
+    refreshMatchCounts(updatedApps);
+    saveSession(updatedApps, extFiles);
+  }
+
+  async function handleClearApp(appId: string) {
+    const updatedApps = applications.map((a) =>
+      a.id === appId ? { ...a, files: [], analysis: null } : a
+    );
+    setApplications(updatedApps);
+    saveSession(updatedApps, externalFiles);
+  }
+
+  // Merge new files into existing, replacing by filename
+  function mergeFiles(existing: LoadedFile[], incoming: LoadedFile[]): LoadedFile[] {
+    const map = new Map(existing.map((f) => [f.filename, f]));
+    for (const f of incoming) map.set(f.filename, f);
+    return [...map.values()];
+  }
+
+  // ── External file management ───────────────────────────────────────────────
+
+  async function handleExternalFiles(files: File[]) {
+    const loaded = await ingestFiles(files, 'external');
+    externalRegistryRef.current.addFiles(loaded);
+    const extFiles = externalRegistryRef.current.getAll();
+    setExternalFiles(extFiles);
+    setExternalEntries(externalRegistryRef.current.getAllEntries());
+
+    const currentApps = applications;
+    await reanalyzeAllApps(currentApps, extFiles);
+    saveSession(currentApps, extFiles);
+  }
+
+  async function handleRemoveExternal(filename: string) {
+    externalRegistryRef.current.removeFile(filename, 'external');
+    const extFiles = externalRegistryRef.current.getAll();
+    setExternalFiles(extFiles);
+    setExternalEntries(externalRegistryRef.current.getAllEntries());
+
+    const currentApps = applications;
+    await reanalyzeAllApps(currentApps, extFiles);
+    saveSession(currentApps, extFiles);
+  }
+
+  async function handleClearExternal() {
+    externalRegistryRef.current.clear();
+    setExternalFiles([]);
+    setExternalEntries([]);
+
+    const currentApps = applications;
+    await reanalyzeAllApps(currentApps, []);
+    saveSession(currentApps, []);
+  }
+
+  // ── Session ────────────────────────────────────────────────────────────────
 
   async function handleClearSession() {
-    fileRegistry.clear();
+    const fresh = [makeDefaultApp(1)];
+    setApplications(fresh);
+    setExternalFiles([]);
+    setExternalEntries([]);
+    externalRegistryRef.current.clear();
+    setSelectedAppId(null);
+    setActiveFile(null);
     patternRegistry.clear();
     msgStructRegistry.clear();
-    setAllEntries([]);
-    setAnalysis(null);
-    setActiveFile(null);
     setPatterns([]);
     setMsgStructPatterns([]);
-    await clearFiles();
+    setMatchCounts(new Map());
+    setMsgStructMatchCounts(new Map());
+    await clearSession();
   }
+
+  // ── Patterns ───────────────────────────────────────────────────────────────
 
   function handleAddPattern(p: Omit<CustomPattern, 'id'>) {
     patternRegistry.add(p);
@@ -163,13 +344,16 @@ export default function App() {
   }
 
   function handleDetectMsgStructs(): number {
-    if (!analysis) return 0;
-    const sourceFiles = fileRegistry.getSources();
+    // Detect across all apps
+    const allSourceFiles = applications.flatMap((a) =>
+      a.files.filter((f) => /\.(c|cpp)$/i.test(f.filename))
+    );
+    const allStructs = applications.flatMap((a) => a.analysis?.typeDict.structs ?? []);
     const existingNames = new Set(msgStructPatterns.map((p) => p.name));
     let added = 0;
-    for (const struct of analysis.typeDict.structs) {
+    for (const struct of allStructs) {
       if (existingNames.has(struct.name)) continue;
-      const refs = findReferences(struct.name, sourceFiles);
+      const refs = findReferences(struct.name, allSourceFiles);
       if (refs.length >= 2) {
         msgStructRegistry.add({ name: struct.name, pattern: `^${struct.name}$` });
         existingNames.add(struct.name);
@@ -180,32 +364,24 @@ export default function App() {
     return added;
   }
 
-  function handleExportMsgStructPatterns() {
-    const json = msgStructRegistry.exportAsJson();
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'cid-msg-struct-patterns.json';
-    a.click();
-    URL.revokeObjectURL(url);
+  async function handleReanalyze() {
+    await reanalyzeAllApps(applications, externalFiles);
   }
+
+  // ── Export ─────────────────────────────────────────────────────────────────
 
   function handleExportPatterns() {
     const json = patternRegistry.exportAsJson();
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'cid-patterns.json';
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(json, 'application/json', 'cid-patterns.json');
   }
 
-  function handleExportTxt() {
-    if (!analysis) return;
+  function handleExportMsgStructPatterns() {
+    downloadBlob(msgStructRegistry.exportAsJson(), 'application/json', 'cid-msg-struct-patterns.json');
+  }
+
+  function handleExportTxt(analysis: StringAnalysis, appName: string) {
     const lines: string[] = [];
-    lines.push('C Interface Discovery — Analysis Report');
+    lines.push(`C Interface Discovery — ${appName}`);
     lines.push('='.repeat(60));
     lines.push('');
 
@@ -228,21 +404,9 @@ export default function App() {
         lines.push('  IPC CALLS:');
         for (const c of file.ipc) lines.push(`    [${c.type}] ${c.detail}`);
       }
-      if (file.externs.length > 0) {
-        lines.push('  EXTERNS:');
-        for (const e of file.externs) lines.push(`    [${e.kind}] ${e.dataType} ${e.name}`);
-      }
-      if (file.defines.length > 0) {
-        lines.push('  DEFINES:');
-        for (const d of file.defines) lines.push(`    [${d.category}] ${d.name} = ${d.value}`);
-      }
       if (file.risks.length > 0) {
         lines.push('  RISKS:');
         for (const r of file.risks) lines.push(`    [${r.severity}] ${r.msg}`);
-      }
-      if (file.unknownCalls.length > 0) {
-        lines.push('  UNKNOWN CALLS:');
-        lines.push('    ' + file.unknownCalls.join(', '));
       }
       lines.push('');
     }
@@ -254,34 +418,37 @@ export default function App() {
         lines.push(`  ${msg.msgTypeConstant} = ${msg.msgTypeValue}`);
         lines.push(`    direction: ${msg.direction}${msg.directionConfident ? '' : ' (uncertain)'}`);
         lines.push(`    transport: ${msg.transport ?? 'unknown'}`);
-        lines.push(`    defined in: ${msg.definedIn}`);
-        if (msg.struct) {
-          lines.push(`    struct: ${msg.struct.name} (${msg.struct.fields.length} fields)`);
-        } else {
-          lines.push('    struct: NOT RESOLVED');
-        }
+        lines.push(`    struct: ${msg.struct ? msg.struct.name : 'NOT RESOLVED'}`);
         lines.push('');
       }
     }
 
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    downloadBlob(lines.join('\n'), 'text/plain', `cid-${appName.toLowerCase().replace(/\s+/g, '-')}.txt`);
+  }
+
+  function downloadBlob(content: string, type: string, filename: string) {
+    const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'cid-report.txt';
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
   }
 
-  const activeFileAnalysis: FileAnalysis | null =
-    analysis?.files.find((f) => f.filename === activeFile) ?? null;
+  // ── Derived state for drill-down ───────────────────────────────────────────
 
-  // Structs visible in the active file: locally defined + typeDict structs referenced by name
-  const activeFileContent = fileRegistry.getSources().find((f) => f.filename === activeFile)?.content ?? '';
+  const selectedApp = applications.find((a) => a.id === selectedAppId) ?? null;
+  const selectedAnalysis = selectedApp?.analysis ?? null;
+
+  const activeFileAnalysis: FileAnalysis | null =
+    selectedAnalysis?.files.find((f) => f.filename === activeFile) ?? null;
+
+  const activeFileContent = selectedApp?.files.find((f) => f.filename === activeFile)?.content ?? '';
   const activeFileStructs = activeFileAnalysis
     ? [
         ...activeFileAnalysis.structs,
-        ...(analysis?.typeDict.structs.filter(
+        ...(selectedAnalysis?.typeDict.structs.filter(
           (s) =>
             !activeFileAnalysis.structs.some((ls) => ls.name === s.name) &&
             activeFileContent.includes(s.name)
@@ -289,23 +456,39 @@ export default function App() {
       ]
     : [];
 
-  const allWarnings = [
-    ...fileRegistry.warnings,
-    ...(analysis?.warnings.filter((w) => w.kind !== 'collision') ?? []),
-  ];
+  // ── Misc ───────────────────────────────────────────────────────────────────
 
-  const fileCount = allEntries.filter((e) => !e.file.rejected).length;
+  const anyAnalyzing = analyzingApps.size > 0;
+  const hasAnyFiles = applications.some((a) => a.files.length > 0) || externalFiles.length > 0;
+  const hasAnyAnalysis = applications.some((a) => a.analysis !== null);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       {/* Header */}
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold tracking-wide text-gray-100">C Interface Discovery</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Static analysis for legacy C messaging interfaces</p>
+          {selectedApp ? (
+            <div className="flex items-center gap-2">
+              <button
+                className="text-gray-500 hover:text-gray-300 text-sm transition-colors"
+                onClick={() => setSelectedAppId(null)}
+              >
+                ← All Applications
+              </button>
+              <span className="text-gray-700">/</span>
+              <span className="text-lg font-semibold text-gray-100">{selectedApp.name}</span>
+            </div>
+          ) : (
+            <div>
+              <h1 className="text-lg font-semibold tracking-wide text-gray-100">C Interface Discovery</h1>
+              <p className="text-xs text-gray-500 mt-0.5">Static analysis for legacy C messaging interfaces</p>
+            </div>
+          )}
         </div>
         <div className="flex gap-2 items-center">
-          {fileCount > 0 && (
+          {hasAnyFiles && (
             <button
               className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-red-900/60 text-gray-500 hover:text-red-300 rounded transition-colors"
               onClick={handleClearSession}
@@ -313,11 +496,11 @@ export default function App() {
               Clear session
             </button>
           )}
-          {analysis && (
+          {selectedAnalysis && (
             <>
               <button
                 className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
-                onClick={handleExportTxt}
+                onClick={() => handleExportTxt(selectedAnalysis, selectedApp!.name)}
               >
                 ↓ Export TXT
               </button>
@@ -345,150 +528,413 @@ export default function App() {
           </div>
         )}
 
-        {/* Drop zones */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-          {(['string', 'external'] as FileZone[]).map((zone) => {
-            const zoneCount = allEntries.filter((e) => e.file.zone === zone).length;
-            return (
-              <div key={zone}>
-                <DropZone
-                  zone={zone}
-                  onFiles={(files) => handleFiles(files, zone)}
-                  label={zone === 'string' ? 'SOURCE FILES' : 'EXTERNAL INCLUDES'}
-                  accept={zone === 'string' ? '.c,.h,.cpp' : '.h'}
-                  description={zone === 'string'
-                    ? 'Drop the source directory here (.c and .h)'
-                    : 'Drop shared include directory files here (.h only)'}
+        {/* ── DRILL-DOWN VIEW ─────────────────────────────────────────────── */}
+        {selectedApp && (
+          <DrillDownView
+            app={selectedApp}
+            analysis={selectedAnalysis}
+            analyzing={analyzingApps.has(selectedApp.id)}
+            activeFile={activeFile}
+            setActiveFile={(f) => {
+              setActiveFile(f);
+              setView('per-file');
+            }}
+            activeFileAnalysis={activeFileAnalysis}
+            activeFileStructs={activeFileStructs}
+            view={view}
+            setView={setView}
+            sourceFiles={selectedApp.files.filter((f) => /\.(c|cpp)$/i.test(f.filename))}
+            onAddAsPattern={setPatternPrefill}
+            onAddAsMsgStructPattern={setMsgStructPrefill}
+            patterns={patterns}
+            onAddPattern={handleAddPattern}
+            onUpdatePattern={handleUpdatePattern}
+            onRemovePattern={handleRemovePattern}
+            onImportPatterns={handleImportPatterns}
+            onExportPatterns={handleExportPatterns}
+            onReanalyze={handleReanalyze}
+            matchCounts={matchCounts}
+            patternPrefill={patternPrefill}
+            msgStructPatterns={msgStructPatterns}
+            onAddMsgStructPattern={handleAddMsgStructPattern}
+            onRemoveMsgStructPattern={handleRemoveMsgStructPattern}
+            onImportMsgStructPatterns={handleImportMsgStructPatterns}
+            onExportMsgStructPatterns={handleExportMsgStructPatterns}
+            onDetectMsgStructs={handleDetectMsgStructs}
+            msgStructPrefill={msgStructPrefill}
+            msgStructMatchCounts={msgStructMatchCounts}
+          />
+        )}
+
+        {/* ── APP-LEVEL VIEW ──────────────────────────────────────────────── */}
+        {!selectedApp && (
+          <>
+            {/* Application zones grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+              {applications.map((app) => (
+                <AppZone
+                  key={app.id}
+                  group={app}
+                  onFiles={(files) => handleAppFiles(app.id, files)}
+                  onRemoveFile={(filename) => handleRemoveAppFile(app.id, filename)}
+                  onClearApp={() => handleClearApp(app.id)}
+                  onRename={(name) => handleRenameApp(app.id, name)}
+                  onRemoveApp={() => handleRemoveApp(app.id)}
+                  canRemoveApp={applications.length > 1}
+                  analyzing={analyzingApps.has(app.id)}
                 />
-                {zoneCount > 0 && (
-                  <div className="flex justify-end mt-1.5 mb-0.5">
+              ))}
+              {/* Add application button */}
+              <button
+                className="flex flex-col items-center justify-center border-2 border-dashed border-gray-700 hover:border-gray-500 rounded-lg p-8 text-gray-600 hover:text-gray-400 transition-colors"
+                onClick={handleAddApp}
+              >
+                <span className="text-2xl mb-1">+</span>
+                <span className="text-xs font-mono">Add Application</span>
+              </button>
+            </div>
+
+            {/* External headers zone */}
+            <div className="mb-6">
+              <div className="text-xs font-semibold uppercase tracking-wider text-gray-600 mb-2">
+                External Headers <span className="font-normal normal-case text-gray-700">(shared across all applications)</span>
+              </div>
+              <div>
+                <DropZone
+                  zone="external"
+                  onFiles={handleExternalFiles}
+                  label="EXTERNAL INCLUDES"
+                  accept=".h"
+                  description="Drop shared include directory files here (.h only)"
+                />
+                {externalFiles.length > 0 && (
+                  <div className="flex justify-end mt-1.5">
                     <button
                       className="text-xs text-gray-600 hover:text-red-400 transition-colors"
-                      onClick={() => handleClearZone(zone)}
+                      onClick={handleClearExternal}
                     >
-                      Clear all ({zoneCount})
+                      Clear all ({externalFiles.length})
                     </button>
                   </div>
                 )}
-                <FileList entries={allEntries} zone={zone} onRemove={handleRemove} />
+                <FileList
+                  entries={externalEntries}
+                  zone="external"
+                  onRemove={(filename) => handleRemoveExternal(filename)}
+                />
               </div>
-            );
-          })}
-        </div>
+            </div>
 
-        {/* Analysis section */}
-        {(analysis || analyzing) && (
-          <>
-            {analyzing && (
-              <div className="mb-4 text-xs text-gray-500 animate-pulse">Analyzing…</div>
+            {/* Analyzing indicator */}
+            {anyAnalyzing && (
+              <div className="mb-4 text-xs text-gray-500 animate-pulse">
+                Analyzing {[...analyzingApps].map((id) => applications.find((a) => a.id === id)?.name ?? id).join(', ')}…
+              </div>
             )}
 
-            <WarningBanner warnings={allWarnings} />
-            <SummaryBar analysis={analysis} />
-
-            {analysis && (
-              <>
-                {/* ── Graph (always visible) ────────────────────────────── */}
-                <div className="mb-6">
-                  <InterfaceGraph
-                    analysis={analysis}
-                    onSelectFile={(filename) => {
-                      setActiveFile(filename);
-                      setView('per-file');
-                    }}
-                  />
-                </div>
-
-                {/* ── View tabs ─────────────────────────────────────────── */}
-                <div className="flex gap-1 mb-4 border-b border-gray-800 pb-0">
-                  {([
-                    { id: 'interfaces', label: 'Interfaces' },
-                    { id: 'per-file',   label: 'Per-file' },
-                  ] as const).map((tab) => (
-                    <button
-                      key={tab.id}
-                      onClick={() => setView(tab.id)}
-                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                        view === tab.id
-                          ? 'border-blue-500 text-blue-400'
-                          : 'border-transparent text-gray-500 hover:text-gray-300'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* ── Interfaces tab ────────────────────────────────────── */}
-                {view === 'interfaces' && (
-                  <ExternalInterfacesSummary analysis={analysis} sourceFiles={fileRegistry.getSources()} />
-                )}
-
-                {/* ── Per-file tab ──────────────────────────────────────── */}
-                {view === 'per-file' && (
-                  <div>
-                    <FileTabs
-                      files={analysis.files}
-                      activeFile={activeFile}
-                      onSelect={setActiveFile}
-                    />
-                    {activeFileAnalysis && (
-                      <div className="space-y-2 mt-2">
-                        <FunctionsSection functions={activeFileAnalysis.functions} />
-                        <IpcSection ipc={activeFileAnalysis.ipc} />
-                        <StructsSection
-                          structs={activeFileStructs}
-                          sourceFiles={fileRegistry.getSources()}
-                          onAddAsMsgStructPattern={(name) => setMsgStructPrefill(name)}
-                        />
-                        <ExternsSection externs={activeFileAnalysis.externs} />
-                        <DefinesSection defines={activeFileAnalysis.defines} />
-                        <UnknownsSection
-                          unknownCalls={activeFileAnalysis.unknownCalls}
-                          onAddAsPattern={(fn) => setPatternPrefill(fn)}
-                        />
-                        <RiskSection risks={activeFileAnalysis.risks} />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-
-                {/* ── Custom patterns ───────────────────────────────────── */}
-                <div className="mt-8 border-t border-gray-800 pt-6">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-                    Custom Patterns
+            {/* Application-level graph */}
+            {(hasAnyAnalysis || applications.some((a) => a.files.length > 0)) && (
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+                    Application Interface Map
                   </h2>
-                  <div className="space-y-2">
-                    <PatternRegistryUI
-                      patterns={patterns}
-                      onAdd={handleAddPattern}
-                      onUpdate={handleUpdatePattern}
-                      onRemove={handleRemovePattern}
-                      onImport={handleImportPatterns}
-                      onExport={handleExportPatterns}
-                      onReanalyze={runAnalysis}
-                      matchCounts={matchCounts}
-                      prefill={patternPrefill}
-                    />
-                    <MsgStructPatternsUI
-                      patterns={msgStructPatterns}
-                      onAdd={handleAddMsgStructPattern}
-                      onRemove={handleRemoveMsgStructPattern}
-                      onImport={handleImportMsgStructPatterns}
-                      onExport={handleExportMsgStructPatterns}
-                      onReanalyze={runAnalysis}
-                      onDetect={handleDetectMsgStructs}
-                      prefill={msgStructPrefill}
-                      matchCounts={msgStructMatchCounts}
-                    />
-                  </div>
+                  <span className="text-xs text-gray-600">click an application node to inspect its internals</span>
                 </div>
-              </>
+                <ApplicationGraph
+                  groups={applications}
+                  onDrillDown={(appId) => {
+                    setSelectedAppId(appId);
+                    setActiveFile(null);
+                    setView('interfaces');
+                  }}
+                />
+              </div>
             )}
+
+            {/* Cross-app interfaces summary */}
+            {hasAnyAnalysis && (
+              <CrossAppSummary applications={applications} />
+            )}
+
+            {/* Custom patterns */}
+            <div className="mt-8 border-t border-gray-800 pt-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                Custom Patterns
+              </h2>
+              <div className="space-y-2">
+                <PatternRegistryUI
+                  patterns={patterns}
+                  onAdd={handleAddPattern}
+                  onUpdate={handleUpdatePattern}
+                  onRemove={handleRemovePattern}
+                  onImport={handleImportPatterns}
+                  onExport={handleExportPatterns}
+                  onReanalyze={handleReanalyze}
+                  matchCounts={matchCounts}
+                  prefill={patternPrefill}
+                />
+                <MsgStructPatternsUI
+                  patterns={msgStructPatterns}
+                  onAdd={handleAddMsgStructPattern}
+                  onRemove={handleRemoveMsgStructPattern}
+                  onImport={handleImportMsgStructPatterns}
+                  onExport={handleExportMsgStructPatterns}
+                  onReanalyze={handleReanalyze}
+                  onDetect={handleDetectMsgStructs}
+                  prefill={msgStructPrefill}
+                  matchCounts={msgStructMatchCounts}
+                />
+              </div>
+            </div>
           </>
         )}
       </main>
     </div>
+  );
+}
+
+// ── Cross-app summary ─────────────────────────────────────────────────────────
+
+function CrossAppSummary({ applications }: { applications: ApplicationGroup[] }) {
+  const analyzed = applications.filter((a) => a.analysis !== null);
+  if (analyzed.length === 0) return null;
+
+  const totalInterfaces = analyzed.reduce((s, a) => s + (a.analysis?.messageInterfaces.length ?? 0), 0);
+  const totalFiles = analyzed.reduce((s, a) => s + (a.analysis?.files.length ?? 0), 0);
+
+  // Find cross-app message flows
+  const msgMap = new Map<string, { producers: string[]; consumers: string[] }>();
+  for (const app of analyzed) {
+    for (const msg of app.analysis!.messageInterfaces) {
+      if (!msgMap.has(msg.msgTypeConstant)) {
+        msgMap.set(msg.msgTypeConstant, { producers: [], consumers: [] });
+      }
+      const entry = msgMap.get(msg.msgTypeConstant)!;
+      const appProduces = msg.fileRoles.some((r) => r.role === 'producer' || r.role === 'both');
+      const appConsumes = msg.fileRoles.some((r) => r.role === 'consumer' || r.role === 'both');
+      if (appProduces && !entry.producers.includes(app.name)) entry.producers.push(app.name);
+      if (appConsumes && !entry.consumers.includes(app.name)) entry.consumers.push(app.name);
+    }
+  }
+
+  const crossAppMsgs = [...msgMap.entries()].filter(
+    ([, e]) => e.producers.length > 0 && e.consumers.length > 0 &&
+      !e.producers.every((p) => e.consumers.includes(p))
+  );
+
+  return (
+    <div className="mb-8 border border-gray-800 rounded-lg overflow-hidden">
+      <div className="px-4 py-3 bg-gray-900/60 border-b border-gray-800 flex items-center gap-4">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-300">Cross-Application Interfaces</h2>
+          <p className="text-xs text-gray-600 mt-0.5">
+            {analyzed.length} application{analyzed.length !== 1 ? 's' : ''} · {totalFiles} source files · {totalInterfaces} message interfaces
+          </p>
+        </div>
+      </div>
+
+      {crossAppMsgs.length > 0 ? (
+        <div className="px-4 py-3">
+          <div className="text-xs font-semibold uppercase tracking-wider text-gray-600 mb-2">
+            Messages crossing application boundaries ({crossAppMsgs.length})
+          </div>
+          <div className="space-y-1">
+            {crossAppMsgs.map(([constant, entry]) => (
+              <div key={constant} className="flex items-center gap-3 text-xs py-1 border-b border-gray-800/40 last:border-0">
+                <span className="font-mono text-gray-300 w-56 shrink-0 truncate">{constant}</span>
+                <span className="text-gray-600">
+                  {entry.producers.join(', ')} → {entry.consumers.join(', ')}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="px-4 py-4 text-xs text-gray-600">
+          No cross-application message flows detected yet. Add source files to multiple applications to see connections.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Drill-down view ───────────────────────────────────────────────────────────
+
+interface DrillDownViewProps {
+  app: ApplicationGroup;
+  analysis: StringAnalysis | null;
+  analyzing: boolean;
+  activeFile: string | null;
+  setActiveFile: (f: string) => void;
+  activeFileAnalysis: FileAnalysis | null;
+  activeFileStructs: import('./analyzer/types').CStruct[];
+  view: 'interfaces' | 'per-file';
+  setView: (v: 'interfaces' | 'per-file') => void;
+  sourceFiles: LoadedFile[];
+  onAddAsPattern: (fn: string) => void;
+  onAddAsMsgStructPattern: (name: string) => void;
+  patterns: CustomPattern[];
+  onAddPattern: (p: Omit<CustomPattern, 'id'>) => void;
+  onUpdatePattern: (id: string, changes: Partial<Omit<CustomPattern, 'id'>>) => void;
+  onRemovePattern: (id: string) => void;
+  onImportPatterns: (imported: CustomPattern[]) => void;
+  onExportPatterns: () => void;
+  onReanalyze: () => void;
+  matchCounts: Map<string, number>;
+  patternPrefill: string | undefined;
+  msgStructPatterns: MsgStructPattern[];
+  onAddMsgStructPattern: (p: Omit<MsgStructPattern, 'id'>) => void;
+  onRemoveMsgStructPattern: (id: string) => void;
+  onImportMsgStructPatterns: (imported: MsgStructPattern[]) => void;
+  onExportMsgStructPatterns: () => void;
+  onDetectMsgStructs: () => number;
+  msgStructPrefill: string | undefined;
+  msgStructMatchCounts: Map<string, number>;
+}
+
+function DrillDownView({
+  app,
+  analysis,
+  analyzing,
+  activeFile,
+  setActiveFile,
+  activeFileAnalysis,
+  activeFileStructs,
+  view,
+  setView,
+  sourceFiles,
+  onAddAsPattern,
+  onAddAsMsgStructPattern,
+  patterns,
+  onAddPattern,
+  onUpdatePattern,
+  onRemovePattern,
+  onImportPatterns,
+  onExportPatterns,
+  onReanalyze,
+  matchCounts,
+  patternPrefill,
+  msgStructPatterns,
+  onAddMsgStructPattern,
+  onRemoveMsgStructPattern,
+  onImportMsgStructPatterns,
+  onExportMsgStructPatterns,
+  onDetectMsgStructs,
+  msgStructPrefill,
+  msgStructMatchCounts,
+}: DrillDownViewProps) {
+  const allWarnings = analysis?.warnings ?? [];
+
+  return (
+    <>
+      {analyzing && (
+        <div className="mb-4 text-xs text-gray-500 animate-pulse">Analyzing {app.name}…</div>
+      )}
+
+      {!analysis && !analyzing && app.files.length === 0 && (
+        <div className="mb-6 p-4 border border-gray-800 rounded-lg text-sm text-gray-600">
+          No source files loaded for {app.name}. Go back and add files to this application.
+        </div>
+      )}
+
+      {analysis && (
+        <>
+          <WarningBanner warnings={allWarnings} />
+          <SummaryBar analysis={analysis} />
+
+          {/* Graph */}
+          <div className="mb-6">
+            <InterfaceGraph
+              analysis={analysis}
+              onSelectFile={(filename) => setActiveFile(filename)}
+            />
+          </div>
+
+          {/* View tabs */}
+          <div className="flex gap-1 mb-4 border-b border-gray-800 pb-0">
+            {([
+              { id: 'interfaces', label: 'Interfaces' },
+              { id: 'per-file',   label: 'Per-file' },
+            ] as const).map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setView(tab.id)}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                  view === tab.id
+                    ? 'border-blue-500 text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {view === 'interfaces' && (
+            <ExternalInterfacesSummary analysis={analysis} sourceFiles={sourceFiles} />
+          )}
+
+          {view === 'per-file' && (
+            <div>
+              <FileTabs
+                files={analysis.files}
+                activeFile={activeFile}
+                onSelect={setActiveFile}
+              />
+              {activeFileAnalysis && (
+                <div className="space-y-2 mt-2">
+                  <FunctionsSection functions={activeFileAnalysis.functions} />
+                  <IpcSection ipc={activeFileAnalysis.ipc} />
+                  <StructsSection
+                    structs={activeFileStructs}
+                    sourceFiles={sourceFiles}
+                    onAddAsMsgStructPattern={onAddAsMsgStructPattern}
+                  />
+                  <ExternsSection externs={activeFileAnalysis.externs} />
+                  <DefinesSection defines={activeFileAnalysis.defines} />
+                  <UnknownsSection
+                    unknownCalls={activeFileAnalysis.unknownCalls}
+                    onAddAsPattern={onAddAsPattern}
+                  />
+                  <RiskSection risks={activeFileAnalysis.risks} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Custom patterns */}
+          <div className="mt-8 border-t border-gray-800 pt-6">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+              Custom Patterns
+            </h2>
+            <div className="space-y-2">
+              <PatternRegistryUI
+                patterns={patterns}
+                onAdd={onAddPattern}
+                onUpdate={onUpdatePattern}
+                onRemove={onRemovePattern}
+                onImport={onImportPatterns}
+                onExport={onExportPatterns}
+                onReanalyze={onReanalyze}
+                matchCounts={matchCounts}
+                prefill={patternPrefill}
+              />
+              <MsgStructPatternsUI
+                patterns={msgStructPatterns}
+                onAdd={onAddMsgStructPattern}
+                onRemove={onRemoveMsgStructPattern}
+                onImport={onImportMsgStructPatterns}
+                onExport={onExportMsgStructPatterns}
+                onReanalyze={onReanalyze}
+                onDetect={onDetectMsgStructs}
+                prefill={msgStructPrefill}
+                matchCounts={msgStructMatchCounts}
+              />
+            </div>
+          </div>
+        </>
+      )}
+    </>
   );
 }
