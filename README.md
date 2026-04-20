@@ -4,7 +4,19 @@ A static analysis web application for mapping messaging interfaces in legacy C s
 
 ## What it does
 
-Load `.c` and `.h` files from a string (SA, TA, fire control, etc.) and the tool will:
+### Application-level view (multi-app)
+
+Load files for multiple named applications and the tool will:
+
+- Display a **cross-application graph** — nodes are applications, edges are message flows between them
+- Detect **transit/broker apps** automatically: an app that both produces and consumes the same message constant is treated as a router; edges route *through* it rather than creating false direct connections between endpoints
+- Show **named external systems**: custom patterns marked "always draw to external node" produce their own named node (e.g. `? bummer`) shared across all apps that reference the same external system
+- Click any edge to see the full **MessageInterface detail panel** — struct, value, direction, transport, and per-file roles for every message on that edge
+- Click any app node to **drill down** into the per-file analysis view for that application
+
+### Per-application (file-level) view
+
+Load `.c` and `.h` files from a single string (SA, TA, fire control, etc.) and the tool will:
 
 - Extract all **message type constants** (`MSG_TYPE_*`, `CMD_*`, `OP_*`, etc.) and correlate them with structs and IPC transport
 - Detect **IPC patterns**: sockets, pipes, shared memory, message queues, semaphores, signals, threads, fork/exec, file I/O, ioctl
@@ -21,6 +33,8 @@ No C compiler required. Analysis is TypeScript string parsing + [Tree-sitter WAS
 - React 18 + TypeScript (strict)
 - Vite
 - Tree-sitter WASM (tree-sitter-c grammar, runs fully in-browser)
+- React Flow (graph visualization)
+- Dagre (automatic graph layout)
 - Tailwind CSS
 - Docker + nginx for airgapped deployment
 
@@ -75,13 +89,37 @@ exit
 
 ## Usage
 
-1. **Drop string files** (`.c` and `.h`) into the left zone — the entire string directory
-2. **Drop external includes** (`.h` only) into the right zone — shared headers from outside the string
+### Multi-application workflow
+
+1. The tool opens with one named application zone — rename it, then **drop string files** (`.c` and `.h`) into it
+2. Click **+ Add Application** to add more applications; drop their files into each zone
+3. Drop **external includes** (`.h` only) into the shared external headers zone — these are available to all applications
+4. The **application graph** renders automatically as files are loaded; edges represent cross-app message flows
+5. Click an **edge** to inspect the full message interface detail for that connection
+6. Click an **app node** to drill into per-file analysis for that application
+7. Add **custom patterns** for project-specific send/recv wrappers; patterns with "always draw to external node" create named external system nodes visible in both the file-level and application-level graphs
+
+### Single-application / per-file workflow
+
+1. **Drop string files** (`.c` and `.h`) into the application zone
+2. **Drop external includes** (`.h` only) into the external headers zone
 3. Analysis runs automatically; results appear in tabs per source file
 4. The **Messaging Interfaces** section is the primary deliverable — one card per detected message type
 5. Add **custom patterns** for project-specific send/recv wrappers not detected automatically
 6. Use **Re-analyze** after adding patterns to refresh results
 7. **Export TXT** for a flat report; **Export Patterns** to share learned patterns across analyst instances
+
+## Test fixtures
+
+`test-fixtures/` contains three synthetic applications for end-to-end testing of the multi-app flow:
+
+| Directory | Description |
+|---|---|
+| `synthetic-string/` | Acoustic sensor array — produces `MSG_TYPE_SOLUTION`, consumes `MSG_TYPE_COMMAND` |
+| `synthetic-wcs/` | Weapons Control System — consumes `MSG_TYPE_SOLUTION`, produces `MSG_TYPE_COMMAND` |
+| `synthetic-broker/` | Message broker — receives from publishers, routes to subscribers; detected automatically as a transit app |
+
+Loading all three demonstrates transit-app detection: the broker routes both message types, and the graph shows sensor array → broker → WCS and WCS → broker → sensor array with no false direct connections.
 
 ## Known limitations
 

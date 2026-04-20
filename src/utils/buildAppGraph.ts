@@ -30,6 +30,16 @@ export type AppExternalNode = Node<AppExternalNodeData, 'appExternalNode'>;
 
 export const APP_EXTERNAL_NODE_ID = '__app_external__';
 
+export function appExternalNodeId(externalName?: string): string {
+  return externalName
+    ? `__app_external__${externalName.toLowerCase().replace(/\s+/g, '_')}`
+    : APP_EXTERNAL_NODE_ID;
+}
+
+export function appExternalNodeLabel(externalName?: string): string {
+  return externalName ? `? ${externalName}` : '? External';
+}
+
 const NODE_W = 200;
 const NODE_H = 90;
 const EXTERNAL_W = 140;
@@ -138,8 +148,6 @@ export function buildAppGraph(
     }
   };
 
-  let needsPhantom = false;
-
   for (const [msgConst, entry] of msgMap) {
     const { producers, consumers, interfaces, confident } = entry;
 
@@ -157,25 +165,62 @@ export function buildAppGraph(
       }
     }
 
-    // Create edges between producer and consumer apps
-    for (const prodId of producers) {
-      for (const consId of consumers) {
-        if (prodId === consId) continue;
-        const iface = interfaces.get(prodId) ?? interfaces.get(consId) ?? [...interfaces.values()][0];
-        addOrMerge(prodId, consId, msgConst, iface, confident);
+    // Separate pure endpoints from transit apps (both produce AND consume same constant).
+    // Transit apps are message brokers / routers — edges should route *through* them,
+    // not skip them to create false direct connections between endpoints.
+    const transitIds  = producers.filter((id) => consumers.includes(id));
+    const pureProds   = producers.filter((id) => !consumers.includes(id));
+    const pureCons    = consumers.filter((id) => !producers.includes(id));
+
+    if (transitIds.length > 0) {
+      // Route through transit: pure-producer → transit → pure-consumer
+      for (const prodId of pureProds) {
+        for (const transitId of transitIds) {
+          const iface = interfaces.get(prodId) ?? interfaces.get(transitId) ?? [...interfaces.values()][0];
+          addOrMerge(prodId, transitId, msgConst, iface, confident);
+        }
+      }
+      for (const transitId of transitIds) {
+        for (const consId of pureCons) {
+          const iface = interfaces.get(transitId) ?? interfaces.get(consId) ?? [...interfaces.values()][0];
+          addOrMerge(transitId, consId, msgConst, iface, confident);
+        }
+      }
+    } else {
+      // No transit apps — direct connections
+      for (const prodId of pureProds) {
+        for (const consId of pureCons) {
+          if (prodId === consId) continue;
+          const iface = interfaces.get(prodId) ?? interfaces.get(consId) ?? [...interfaces.values()][0];
+          addOrMerge(prodId, consId, msgConst, iface, confident);
+        }
       }
     }
 
-    // Phantom edges for one-sided messages (no consumer or no producer in loaded apps)
+    // Phantom edges for message constants with no peer in loaded apps → generic external
     if (producers.length > 0 && consumers.length === 0) {
-      needsPhantom = true;
+      if (!nodeMap.has(APP_EXTERNAL_NODE_ID)) {
+        nodeMap.set(APP_EXTERNAL_NODE_ID, {
+          id: APP_EXTERNAL_NODE_ID,
+          type: 'appExternalNode',
+          position: { x: 0, y: 0 },
+          data: { label: '? External' },
+        });
+      }
       for (const prodId of producers) {
         const iface = interfaces.get(prodId)!;
         addOrMerge(prodId, APP_EXTERNAL_NODE_ID, msgConst, iface, false);
       }
     }
     if (consumers.length > 0 && producers.length === 0) {
-      needsPhantom = true;
+      if (!nodeMap.has(APP_EXTERNAL_NODE_ID)) {
+        nodeMap.set(APP_EXTERNAL_NODE_ID, {
+          id: APP_EXTERNAL_NODE_ID,
+          type: 'appExternalNode',
+          position: { x: 0, y: 0 },
+          data: { label: '? External' },
+        });
+      }
       for (const consId of consumers) {
         const iface = interfaces.get(consId)!;
         addOrMerge(APP_EXTERNAL_NODE_ID, consId, msgConst, iface, false);
@@ -183,13 +228,43 @@ export function buildAppGraph(
     }
   }
 
-  if (needsPhantom) {
-    nodeMap.set(APP_EXTERNAL_NODE_ID, {
-      id: APP_EXTERNAL_NODE_ID,
-      type: 'appExternalNode',
-      position: { x: 0, y: 0 },
-      data: { label: '? External' },
-    });
+  // ── 3b. External IPC call nodes (custom patterns with isExternal=true) ────────
+  // These are function-call patterns (e.g. "bummer_send") that explicitly target
+  // a named external system. They don't correspond to message type constants so
+  // they're not captured by the msgMap loop above.
+  for (const g of analyzedGroups) {
+    for (const file of g.analysis!.files) {
+      for (const call of file.ipc) {
+        if (!call.isExternal) continue;
+        const extId  = appExternalNodeId(call.externalName);
+        const extLabel = appExternalNodeLabel(call.externalName);
+        if (!nodeMap.has(extId)) {
+          nodeMap.set(extId, {
+            id: extId,
+            type: 'appExternalNode',
+            position: { x: 0, y: 0 },
+            data: { label: extLabel },
+          });
+        }
+        // Build a synthetic MessageInterface stub so addOrMerge has something to store
+        const syntheticIface = {
+          msgTypeConstant: call.externalName ?? call.detail,
+          msgTypeValue: '',
+          struct: null,
+          structResolved: false,
+          direction: (call.direction === 'recv' ? 'inbound' : 'outbound') as import('../analyzer/types').MsgDirection,
+          directionConfident: call.direction != null,
+          transport: call.type,
+          definedIn: file.filename,
+          usedIn: [],
+          fileRoles: [{ filename: file.filename, role: call.direction === 'recv' ? 'consumer' as const : 'producer' as const }],
+        };
+        const isSend = call.direction !== 'recv';
+        const edgeSource = isSend ? g.id : extId;
+        const edgeTarget = isSend ? extId : g.id;
+        addOrMerge(edgeSource, edgeTarget, syntheticIface.msgTypeConstant, syntheticIface, true);
+      }
+    }
   }
 
   // ── 4. Collapse reciprocal pairs → bidirectional ────────────────────────────
@@ -222,7 +297,7 @@ export function buildAppGraph(
   });
 
   for (const node of nodeMap.values()) {
-    const isExt = node.id === APP_EXTERNAL_NODE_ID;
+    const isExt = node.type === 'appExternalNode';
     g.setNode(node.id, { width: isExt ? EXTERNAL_W : NODE_W, height: isExt ? EXTERNAL_H : NODE_H });
   }
   for (const e of edgeMap.values()) g.setEdge(e.source, e.target);
@@ -232,7 +307,7 @@ export function buildAppGraph(
   for (const node of nodeMap.values()) {
     const pos = g.node(node.id);
     if (pos) {
-      const isExt = node.id === APP_EXTERNAL_NODE_ID;
+      const isExt = node.type === 'appExternalNode';
       const w = isExt ? EXTERNAL_W : NODE_W;
       const h = isExt ? EXTERNAL_H : NODE_H;
       node.position = { x: pos.x - w / 2, y: pos.y - h / 2 };
