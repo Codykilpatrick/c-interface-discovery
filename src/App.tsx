@@ -696,60 +696,134 @@ export default function App() {
 
 // ── Cross-app summary ─────────────────────────────────────────────────────────
 
+interface CrossAppEntry {
+  constant: string;
+  value: string;
+  appRoles: { appId: string; appName: string; role: 'producer' | 'consumer' | 'both'; usedIn: import('./analyzer/types').FileRef[] }[];
+  crossesApps: boolean; // true if both produced and consumed by different apps
+}
+
 function CrossAppSummary({ applications }: { applications: ApplicationGroup[] }) {
   const analyzed = applications.filter((a) => a.analysis !== null);
+  const [query, setQuery] = useState('');
+  const [openRows, setOpenRows] = useState<Set<string>>(new Set());
+
   if (analyzed.length === 0) return null;
 
   const totalInterfaces = analyzed.reduce((s, a) => s + (a.analysis?.messageInterfaces.length ?? 0), 0);
   const totalFiles = analyzed.reduce((s, a) => s + (a.analysis?.files.length ?? 0), 0);
 
-  // Find cross-app message flows
-  const msgMap = new Map<string, { producers: string[]; consumers: string[] }>();
+  // Build full cross-app index: constant → per-app role + file refs
+  const indexMap = new Map<string, CrossAppEntry>();
   for (const app of analyzed) {
     for (const msg of app.analysis!.messageInterfaces) {
-      if (!msgMap.has(msg.msgTypeConstant)) {
-        msgMap.set(msg.msgTypeConstant, { producers: [], consumers: [] });
+      if (!indexMap.has(msg.msgTypeConstant)) {
+        indexMap.set(msg.msgTypeConstant, { constant: msg.msgTypeConstant, value: msg.msgTypeValue, appRoles: [], crossesApps: false });
       }
-      const entry = msgMap.get(msg.msgTypeConstant)!;
-      const appProduces = msg.fileRoles.some((r) => r.role === 'producer' || r.role === 'both');
-      const appConsumes = msg.fileRoles.some((r) => r.role === 'consumer' || r.role === 'both');
-      if (appProduces && !entry.producers.includes(app.name)) entry.producers.push(app.name);
-      if (appConsumes && !entry.consumers.includes(app.name)) entry.consumers.push(app.name);
+      const entry = indexMap.get(msg.msgTypeConstant)!;
+      const produces = msg.fileRoles.some((r) => r.role === 'producer' || r.role === 'both');
+      const consumes = msg.fileRoles.some((r) => r.role === 'consumer' || r.role === 'both');
+      const role: 'producer' | 'consumer' | 'both' = produces && consumes ? 'both' : produces ? 'producer' : 'consumer';
+      if (!entry.appRoles.find((r) => r.appId === app.id)) {
+        entry.appRoles.push({ appId: app.id, appName: app.name, role, usedIn: msg.usedIn });
+      }
     }
   }
+  // Mark which constants cross app boundaries
+  for (const entry of indexMap.values()) {
+    const producers = entry.appRoles.filter((r) => r.role === 'producer' || r.role === 'both').map((r) => r.appId);
+    const consumers = entry.appRoles.filter((r) => r.role === 'consumer' || r.role === 'both').map((r) => r.appId);
+    entry.crossesApps = producers.length > 0 && consumers.length > 0 && !producers.every((p) => consumers.includes(p));
+  }
 
-  const crossAppMsgs = [...msgMap.entries()].filter(
-    ([, e]) => e.producers.length > 0 && e.consumers.length > 0 &&
-      !e.producers.every((p) => e.consumers.includes(p))
-  );
+  const q = query.trim().toLowerCase();
+  const allEntries = [...indexMap.values()].sort((a, b) => a.constant.localeCompare(b.constant));
+  const filtered = q ? allEntries.filter((e) => e.constant.toLowerCase().includes(q) || e.value.toLowerCase().includes(q)) : allEntries;
+  const autoExpand = filtered.length === 1;
+
+  function toggleRow(constant: string) {
+    setOpenRows((prev) => {
+      const next = new Set(prev);
+      next.has(constant) ? next.delete(constant) : next.add(constant);
+      return next;
+    });
+  }
 
   return (
     <div className="mb-8 border border-gray-800 rounded-lg overflow-hidden">
-      <div className="px-4 py-3 bg-gray-900/60 border-b border-gray-800 flex items-center gap-4">
+      <div className="px-4 py-3 bg-gray-900/60 border-b border-gray-800 flex items-center justify-between gap-4">
         <div>
           <h2 className="text-sm font-semibold text-gray-300">Cross-Application Interfaces</h2>
           <p className="text-xs text-gray-600 mt-0.5">
             {analyzed.length} application{analyzed.length !== 1 ? 's' : ''} · {totalFiles} source files · {totalInterfaces} message interfaces
           </p>
         </div>
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search message constants…"
+          className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-500 w-52 shrink-0"
+        />
       </div>
 
-      {crossAppMsgs.length > 0 ? (
-        <div className="px-4 py-3">
-          <div className="text-xs font-semibold uppercase tracking-wider text-gray-600 mb-2">
-            Messages crossing application boundaries ({crossAppMsgs.length})
-          </div>
-          <div className="space-y-1">
-            {crossAppMsgs.map(([constant, entry]) => (
-              <div key={constant} className="flex items-center gap-3 text-xs py-1 border-b border-gray-800/40 last:border-0">
-                <span className="font-mono text-gray-300 w-56 shrink-0 truncate">{constant}</span>
-                <span className="text-gray-600">
-                  {entry.producers.join(', ')} → {entry.consumers.join(', ')}
-                </span>
+      {filtered.length > 0 ? (
+        <div className="px-4 py-2">
+          {filtered.map((entry) => {
+            const isOpen = autoExpand || openRows.has(entry.constant);
+            return (
+              <div key={entry.constant} className="border-b border-gray-800/40 last:border-0">
+                <button
+                  className="w-full flex items-center gap-3 text-xs py-1.5 text-left hover:bg-gray-800/30 transition-colors"
+                  onClick={() => toggleRow(entry.constant)}
+                >
+                  <span className="text-gray-700 w-3 shrink-0">{isOpen ? '▼' : '▶'}</span>
+                  <span className="font-mono text-gray-200 w-56 shrink-0 truncate">{entry.constant}</span>
+                  <span className="font-mono text-gray-600 w-14 shrink-0">{entry.value}</span>
+                  {entry.crossesApps && (
+                    <span className="px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-400 text-[10px] shrink-0">cross-app</span>
+                  )}
+                  <span className="text-gray-600 ml-auto shrink-0">
+                    {entry.appRoles.length} app{entry.appRoles.length !== 1 ? 's' : ''}
+                  </span>
+                </button>
+                {isOpen && (
+                  <div className="pl-4 pb-2 space-y-1.5">
+                    {entry.appRoles.map((ar) => (
+                      <div key={ar.appId} className="pl-2 border-l border-gray-700/50">
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-gray-400 font-semibold">{ar.appName}</span>
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] ${
+                            ar.role === 'producer' ? 'bg-blue-900/50 text-blue-300' :
+                            ar.role === 'consumer' ? 'bg-green-900/50 text-green-300' :
+                            'bg-purple-900/50 text-purple-300'
+                          }`}>{ar.role}</span>
+                        </div>
+                        {ar.usedIn.length > 0 && (
+                          <div className="mt-1 space-y-1">
+                            {ar.usedIn.map((ref) => (
+                              <div key={ref.filename}>
+                                <div className="text-[10px] font-mono text-gray-600">{ref.filename}</div>
+                                {ref.lines.map((l) => (
+                                  <div key={l.lineNumber} className="flex gap-2 font-mono text-[10px] leading-4 pl-2">
+                                    <span className="text-gray-700 w-7 shrink-0 text-right select-none">{l.lineNumber}</span>
+                                    <span className="text-gray-500 truncate">{l.text}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
+      ) : query ? (
+        <div className="px-4 py-4 text-xs text-gray-600 italic">No message constants match "{query}"</div>
       ) : (
         <div className="px-4 py-4 text-xs text-gray-600">
           No cross-application message flows detected yet. Add source files to multiple applications to see connections.

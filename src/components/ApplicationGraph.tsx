@@ -8,13 +8,16 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getSmoothStepPath,
+  useReactFlow,
+  ReactFlowProvider,
   type NodeProps,
   type EdgeProps,
   type NodeTypes,
   type EdgeTypes,
+  type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useMemo, useState, useEffect, useContext, createContext } from 'react';
+import { useMemo, useState, useEffect, useContext, createContext, useRef, useCallback } from 'react';
 import { useNodesState } from '@xyflow/react';
 import type { IpcType, MessageInterface } from '../analyzer/types';
 import {
@@ -35,11 +38,13 @@ interface GraphSelection {
   selectedNodeId: string | null;
   connectedEdgeIds: Set<string>;
   connectedNodeIds: Set<string>;
+  searchMatchIds: Set<string> | null; // null = no active search
 }
 const SelectionCtx = createContext<GraphSelection>({
   selectedNodeId: null,
   connectedEdgeIds: new Set(),
   connectedNodeIds: new Set(),
+  searchMatchIds: null,
 });
 
 // ── IPC color map ─────────────────────────────────────────────────────────────
@@ -76,16 +81,19 @@ const DIRECTION_COLOR: Record<EdgeDirection, string> = {
 
 function AppNodeComponent({ data, selected, id }: NodeProps<AppNode>) {
   const { label, ipcTypes, fileCount } = data as AppNodeData;
-  const { selectedNodeId, connectedNodeIds } = useContext(SelectionCtx);
+  const { selectedNodeId, connectedNodeIds, searchMatchIds } = useContext(SelectionCtx);
   const isSelected = id === selectedNodeId;
-  const isDimmed = selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
+  const isSearchMatch = searchMatchIds !== null && searchMatchIds.has(id);
+  const isDimmed = searchMatchIds !== null
+    ? !isSearchMatch
+    : selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
 
   return (
     <div
       className="bg-gray-900 rounded-lg px-3 py-2.5 w-48 shadow-lg transition-all cursor-pointer group"
       style={{
-        border: `2px solid ${isSelected || selected ? '#60a5fa' : '#374151'}`,
-        opacity: isDimmed ? 0.25 : 1,
+        border: `2px solid ${isSelected || selected || isSearchMatch ? '#60a5fa' : '#374151'}`,
+        opacity: isDimmed ? 0.15 : 1,
       }}
       onMouseEnter={(e) => { if (!isSelected && !selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#6b7280'; }}
       onMouseLeave={(e) => { if (!isSelected && !selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#374151'; }}
@@ -119,9 +127,12 @@ function AppNodeComponent({ data, selected, id }: NodeProps<AppNode>) {
 // ── External phantom node ─────────────────────────────────────────────────────
 
 function AppExternalNodeComponent({ selected, id, data }: NodeProps<AppExternalNode>) {
-  const { selectedNodeId, connectedNodeIds } = useContext(SelectionCtx);
+  const { selectedNodeId, connectedNodeIds, searchMatchIds } = useContext(SelectionCtx);
   const isSelected = id === selectedNodeId;
-  const isDimmed = selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
+  const isSearchMatch = searchMatchIds !== null && searchMatchIds.has(id);
+  const isDimmed = searchMatchIds !== null
+    ? !isSearchMatch
+    : selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
   return (
     <div
       className="rounded-lg px-3 py-2 w-36 flex flex-col items-center justify-center"
@@ -324,7 +335,7 @@ interface ApplicationGraphProps {
   onDrillDown: (appId: string) => void;
 }
 
-export default function ApplicationGraph({ groups, onDrillDown }: ApplicationGraphProps) {
+function ApplicationGraphInner({ groups, onDrillDown }: ApplicationGraphProps) {
   const [rankdir, setRankdir] = useState<RankDir>('LR');
   const { nodes: initialNodes, edges } = useMemo(() => buildAppGraph(groups, rankdir), [groups, rankdir]);
   const [nodes, setNodes, onNodesChange] = useNodesState<AppNode | AppExternalNode>(initialNodes);
@@ -335,11 +346,15 @@ export default function ApplicationGraph({ groups, onDrillDown }: ApplicationGra
     targetLabel: string;
     interfaces: MessageInterface[];
   } | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const rfInstance = useRef<ReactFlowInstance | null>(null);
+  const { fitView } = useReactFlow();
 
   useEffect(() => {
     setNodes(initialNodes);
     setSelectedNodeId(null);
     setDetailPanel(null);
+    setSearchQuery('');
   }, [initialNodes, setNodes]);
 
   const { connectedEdgeIds, connectedNodeIds } = useMemo(() => {
@@ -355,9 +370,34 @@ export default function ApplicationGraph({ groups, onDrillDown }: ApplicationGra
     return { connectedEdgeIds: edgeIds, connectedNodeIds: nodeIds };
   }, [selectedNodeId, edges]);
 
+  // Search: match node labels (app name or external label)
+  const searchMatchIds = useMemo<Set<string> | null>(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return null;
+    const matched = new Set<string>();
+    for (const node of nodes) {
+      const label = node.type === 'appNode'
+        ? (node.data as AppNodeData).label
+        : (node.data as AppExternalNodeData).label;
+      if (label.toLowerCase().includes(q)) matched.add(node.id);
+    }
+    return matched;
+  }, [searchQuery, nodes]);
+
+  // Pan to matched nodes when search narrows to ≥1 result
+  const prevMatchCount = useRef<number>(0);
+  useEffect(() => {
+    if (!searchMatchIds || searchMatchIds.size === 0) { prevMatchCount.current = 0; return; }
+    if (searchMatchIds.size !== prevMatchCount.current) {
+      prevMatchCount.current = searchMatchIds.size;
+      const matchedNodes = nodes.filter((n) => searchMatchIds.has(n.id));
+      fitView({ nodes: matchedNodes, padding: 0.4, duration: 300 });
+    }
+  }, [searchMatchIds, nodes, fitView]);
+
   const selectionCtx = useMemo<GraphSelection>(
-    () => ({ selectedNodeId, connectedEdgeIds, connectedNodeIds }),
-    [selectedNodeId, connectedEdgeIds, connectedNodeIds]
+    () => ({ selectedNodeId, connectedEdgeIds, connectedNodeIds, searchMatchIds }),
+    [selectedNodeId, connectedEdgeIds, connectedNodeIds, searchMatchIds]
   );
 
   const nodeLabels = useMemo(() => {
@@ -374,6 +414,11 @@ export default function ApplicationGraph({ groups, onDrillDown }: ApplicationGra
     },
     nodeLabels,
   }), [nodeLabels]);
+
+  const handleSearchClear = useCallback(() => {
+    setSearchQuery('');
+    fitView({ padding: 0.25, duration: 300 });
+  }, [fitView]);
 
   if (nodes.length === 0) {
     return (
@@ -407,10 +452,11 @@ export default function ApplicationGraph({ groups, onDrillDown }: ApplicationGra
               fitView
               fitViewOptions={{ padding: 0.25 }}
               minZoom={0.2}
+              onInit={(instance) => { rfInstance.current = instance as unknown as ReactFlowInstance; }}
               onNodeClick={(_, node) => {
                 const nodeId = node.id;
                 setSelectedNodeId((prev) => (prev === nodeId ? null : nodeId));
-                if (nodeId !== APP_EXTERNAL_NODE_ID) {
+                if (nodeId !== APP_EXTERNAL_NODE_ID && !node.id.startsWith('__app_external__')) {
                   onDrillDown(nodeId);
                 }
               }}
@@ -438,6 +484,31 @@ export default function ApplicationGraph({ groups, onDrillDown }: ApplicationGra
               <Background color="#1f2937" gap={20} />
               <Controls className="[&>button]:bg-gray-800 [&>button]:border-gray-700 [&>button]:text-gray-400" />
               <MiniMap nodeColor="#374151" maskColor="rgba(3,7,18,0.7)" className="!bg-gray-900 !border !border-gray-700 rounded" />
+
+              {/* Search box */}
+              <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 10 }}
+                className="flex items-center gap-1 bg-gray-900/90 border border-gray-700 rounded px-2 py-1"
+              >
+                <span className="text-gray-600 text-xs select-none">⌕</span>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Find node…"
+                  className="bg-transparent text-xs font-mono text-gray-300 placeholder-gray-600 focus:outline-none w-32"
+                />
+                {searchQuery && (
+                  <>
+                    <span className="text-gray-600 text-[10px] shrink-0">
+                      {searchMatchIds?.size ?? 0} match{(searchMatchIds?.size ?? 0) !== 1 ? 'es' : ''}
+                    </span>
+                    <button
+                      onClick={handleSearchClear}
+                      className="text-gray-600 hover:text-gray-400 text-xs ml-1"
+                    >✕</button>
+                  </>
+                )}
+              </div>
 
               {/* Layout toggle */}
               <div style={{ position: 'absolute', top: 10, right: detailPanel ? 288 : 10, zIndex: 10 }} className="flex gap-1">
@@ -485,5 +556,13 @@ export default function ApplicationGraph({ groups, onDrillDown }: ApplicationGra
         </EdgeClickCtx.Provider>
       </SelectionCtx.Provider>
     </div>
+  );
+}
+
+export default function ApplicationGraph(props: ApplicationGraphProps) {
+  return (
+    <ReactFlowProvider>
+      <ApplicationGraphInner {...props} />
+    </ReactFlowProvider>
   );
 }

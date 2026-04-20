@@ -139,9 +139,10 @@ function StructRefLink({ structName, sourceFiles }: { structName: string; source
 
 // ── Message type row ──────────────────────────────────────────────────────────
 
-function MsgTypeRow({ msg, sourceFiles }: { msg: MessageInterface; sourceFiles: LoadedFile[] }) {
+function MsgTypeRow({ msg, sourceFiles, forceOpen }: { msg: MessageInterface; sourceFiles: LoadedFile[]; forceOpen?: boolean }) {
   const [open, setOpen] = useState(false);
   const hasRefs = msg.usedIn.length > 0;
+  const isOpen = forceOpen || open;
 
   return (
     <div className="border-b border-gray-800/40 last:border-0">
@@ -151,7 +152,7 @@ function MsgTypeRow({ msg, sourceFiles }: { msg: MessageInterface; sourceFiles: 
         title={hasRefs ? 'Click to see file references' : undefined}
       >
         {hasRefs && (
-          <span className="text-gray-700 text-xs w-3 shrink-0">{open ? '▼' : '▶'}</span>
+          <span className="text-gray-700 text-xs w-3 shrink-0">{isOpen ? '▼' : '▶'}</span>
         )}
         {!hasRefs && <span className="w-3 shrink-0" />}
         <span className="font-mono text-gray-200 w-44 shrink-0 truncate">{msg.msgTypeConstant}</span>
@@ -175,7 +176,7 @@ function MsgTypeRow({ msg, sourceFiles }: { msg: MessageInterface; sourceFiles: 
         <span className="text-xs text-gray-700 truncate ml-auto">{msg.definedIn}</span>
       </button>
 
-      {open && (
+      {isOpen && (
         <div className="pl-6 pr-3 pb-2 bg-gray-900/40">
           <RefLines refs={msg.usedIn} />
         </div>
@@ -246,8 +247,19 @@ function ExportedFnRow({ item }: { item: ExportedFn }) {
 export default function ExternalInterfacesSummary({ analysis, sourceFiles }: ExternalInterfacesSummaryProps) {
   const ipcGroups = buildIpcGroups(analysis);
   const exportedFns = buildExportedFunctions(analysis);
+  const [msgQuery, setMsgQuery] = useState('');
 
   if (ipcGroups.length === 0 && exportedFns.length === 0) return null;
+
+  const q = msgQuery.trim().toLowerCase();
+  const filteredMsgs = q
+    ? analysis.messageInterfaces.filter(
+        (m) =>
+          m.msgTypeConstant.toLowerCase().includes(q) ||
+          m.msgTypeValue.toLowerCase().includes(q)
+      )
+    : analysis.messageInterfaces;
+  const autoExpand = filteredMsgs.length === 1;
 
   return (
     <div className="mb-8 border border-gray-800 rounded-lg overflow-hidden">
@@ -271,14 +283,27 @@ export default function ExternalInterfacesSummary({ analysis, sourceFiles }: Ext
       {/* Messaging Interfaces */}
       {analysis.messageInterfaces.length > 0 && (
         <div className="px-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-gray-600 pt-3 pb-1">
-            Message Types
-            <span className="ml-2 font-normal normal-case text-gray-700">(click row to see references)</span>
+          <div className="flex items-center justify-between pt-3 pb-1 gap-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-600 shrink-0">
+              Message Types
+              <span className="ml-2 font-normal normal-case text-gray-700">(click row to see references)</span>
+            </span>
+            <input
+              type="text"
+              value={msgQuery}
+              onChange={(e) => setMsgQuery(e.target.value)}
+              placeholder="Search message constants…"
+              className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-500 w-52"
+            />
           </div>
           <div className="py-1">
-            {analysis.messageInterfaces.map((msg) => (
-              <MsgTypeRow key={msg.msgTypeConstant} msg={msg} sourceFiles={sourceFiles} />
-            ))}
+            {filteredMsgs.length > 0 ? (
+              filteredMsgs.map((msg) => (
+                <MsgTypeRow key={msg.msgTypeConstant} msg={msg} sourceFiles={sourceFiles} forceOpen={autoExpand} />
+              ))
+            ) : (
+              <div className="py-3 text-xs text-gray-600 italic">No message constants match "{msgQuery}"</div>
+            )}
           </div>
         </div>
       )}

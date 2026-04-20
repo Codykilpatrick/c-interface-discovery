@@ -61,7 +61,7 @@ export default function MessagingSection({ messages }: MessagingSectionProps) {
               {/* Referenced in */}
               {msg.usedIn.length > 0 && (
                 <div className="text-xs text-gray-500 mb-2">
-                  referenced in: {msg.usedIn.join(', ')}
+                  referenced in: {msg.usedIn.map((r) => r.filename).join(', ')}
                 </div>
               )}
               <div className="text-xs text-gray-600">defined in: {msg.definedIn}</div>
