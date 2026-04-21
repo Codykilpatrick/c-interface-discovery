@@ -77,6 +77,12 @@ export interface IpcCall {
   isExternal?: boolean;
   /** Name of the external system — shared across patterns with the same name. */
   externalName?: string;
+  /** ALL_CAPS constant identifiers passed as arguments to this custom IPC call, found in typeDict.defines. */
+  msgConstants?: string[];
+  /** ALL_CAPS constant identifiers passed as arguments that were NOT found in typeDict.defines (missing headers). */
+  missingConstants?: string[];
+  /** Struct type names found in the containing wrapper function's parameter list. */
+  impliedStructs?: string[];
 }
 
 export interface CodeLine {

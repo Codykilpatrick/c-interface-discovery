@@ -266,10 +266,156 @@ export function extractMessageInterfaces(
   );
 
   // Exclude struct-based entries whose name already appears as a define-based entry
-  const defineNames = new Set(defineBasedInterfaces.map((m) => m.msgTypeConstant));
+  const existingConstantNames = new Set(defineBasedInterfaces.map((m) => m.msgTypeConstant));
   const uniqueStructInterfaces = structBasedInterfaces.filter(
-    (m) => !defineNames.has(m.msgTypeConstant)
+    (m) => !existingConstantNames.has(m.msgTypeConstant)
   );
 
-  return [...defineBasedInterfaces, ...uniqueStructInterfaces];
+  // ── Strategy A: constants extracted from custom IPC call arguments ──────────
+  // Collect (constant, file, direction) tuples from all IpcCall.msgConstants and
+  // IpcCall.missingConstants. Constants in msgConstants get full processing;
+  // constants in missingConstants get a "definition not found" stub entry.
+  interface ConstantSource {
+    filename: string;
+    direction: 'send' | 'recv' | 'bidirectional';
+    transport: IpcType;
+    missing: boolean;
+  }
+  const constantSources = new Map<string, ConstantSource[]>();
+
+  for (const analysis of analyses) {
+    for (const ipcCall of analysis.ipc) {
+      const dir = ipcCall.direction ?? 'bidirectional';
+      const addSource = (constant: string, missing: boolean) => {
+        const list = constantSources.get(constant) ?? [];
+        list.push({ filename: analysis.filename, direction: dir, transport: ipcCall.type, missing });
+        constantSources.set(constant, list);
+      };
+      for (const c of ipcCall.msgConstants   ?? []) addSource(c, false);
+      for (const c of ipcCall.missingConstants ?? []) addSource(c, true);
+    }
+  }
+
+  const allExistingNames = new Set([
+    ...existingConstantNames,
+    ...uniqueStructInterfaces.map((m) => m.msgTypeConstant),
+  ]);
+
+  const ipcArgInterfaces: MessageInterface[] = [];
+
+  for (const [constant, sources] of constantSources) {
+    const isMissing = sources.every((s) => s.missing);
+
+    // Augment existing entry's direction if it was 'unknown' and we now have confident direction
+    if (allExistingNames.has(constant)) {
+      const existing = defineBasedInterfaces.find((m) => m.msgTypeConstant === constant);
+      if (existing && !existing.directionConfident) {
+        const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional');
+        const hasRecv = sources.some((s) => s.direction === 'recv' || s.direction === 'bidirectional');
+        if (hasSend || hasRecv) {
+          existing.direction = hasSend && hasRecv ? 'both' : hasSend ? 'producer' : 'consumer';
+          existing.directionConfident = true;
+          existing.transport = existing.transport ?? sources[0].transport;
+        }
+        // Merge fileRoles from IPC call sources
+        for (const src of sources) {
+          if (!existing.fileRoles.some((r) => r.filename === src.filename)) {
+            const role = src.direction === 'send' ? 'producer' : src.direction === 'recv' ? 'consumer' : 'both';
+            existing.fileRoles.push({ filename: src.filename, role });
+          }
+        }
+      }
+      continue;
+    }
+
+    const defEntry = allDefines.find((d) => d.name === constant);
+    const struct = isMissing ? null : resolveStruct(constant, typeDict);
+    const allRefs = isMissing ? [] : filesUsingConstant(constant, analyses, sourceFiles);
+
+    const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional');
+    const hasRecv = sources.some((s) => s.direction === 'recv' || s.direction === 'bidirectional');
+    const direction: MsgDirection = hasSend && hasRecv ? 'both' : hasSend ? 'producer' : hasRecv ? 'consumer' : 'unknown';
+
+    const fileRoles: MsgFileRole[] = sources.map((s) => ({
+      filename: s.filename,
+      role: s.direction === 'send' ? 'producer' : s.direction === 'recv' ? 'consumer' : 'both',
+    }));
+    // Deduplicate fileRoles by filename (keep first)
+    const seenFiles = new Set<string>();
+    const dedupedRoles = fileRoles.filter((r) => { const seen = seenFiles.has(r.filename); seenFiles.add(r.filename); return !seen; });
+
+    ipcArgInterfaces.push({
+      msgTypeConstant: constant,
+      msgTypeValue: isMissing ? '(definition not found)' : (defEntry?.value ?? ''),
+      struct,
+      structResolved: struct !== null,
+      direction,
+      directionConfident: hasSend || hasRecv,
+      transport: sources[0].transport,
+      definedIn: defEntry?.sourceFile ?? '',
+      usedIn: allRefs,
+      fileRoles: dedupedRoles,
+    });
+    allExistingNames.add(constant);
+  }
+
+  // ── Strategy B: structs implied by wrapper function parameter types ──────────
+  // Collect (structName, file, direction) from IpcCall.impliedStructs
+  interface StructSource {
+    filename: string;
+    direction: 'send' | 'recv' | 'bidirectional';
+    transport: IpcType;
+  }
+  const structSources = new Map<string, StructSource[]>();
+
+  for (const analysis of analyses) {
+    for (const ipcCall of analysis.ipc) {
+      for (const structName of ipcCall.impliedStructs ?? []) {
+        const list = structSources.get(structName) ?? [];
+        list.push({
+          filename: analysis.filename,
+          direction: ipcCall.direction ?? 'bidirectional',
+          transport: ipcCall.type,
+        });
+        structSources.set(structName, list);
+      }
+    }
+  }
+
+  const impliedStructInterfaces: MessageInterface[] = [];
+
+  for (const [structName, sources] of structSources) {
+    if (allExistingNames.has(structName)) continue; // already covered
+
+    const cStruct = typeDict.structs.find((s) => s.name === structName) ?? null;
+    if (!cStruct) continue;
+
+    const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional');
+    const hasRecv = sources.some((s) => s.direction === 'recv' || s.direction === 'bidirectional');
+    const direction: MsgDirection = hasSend && hasRecv ? 'both' : hasSend ? 'producer' : hasRecv ? 'consumer' : 'unknown';
+
+    const seenFiles2 = new Set<string>();
+    const dedupedRoles: MsgFileRole[] = sources
+      .filter((s) => { const seen = seenFiles2.has(s.filename); seenFiles2.add(s.filename); return !seen; })
+      .map((s) => ({
+        filename: s.filename,
+        role: s.direction === 'send' ? 'producer' : s.direction === 'recv' ? 'consumer' : 'both' as const,
+      }));
+
+    impliedStructInterfaces.push({
+      msgTypeConstant: structName,
+      msgTypeValue: '(implied from wrapper)',
+      struct: cStruct,
+      structResolved: true,
+      direction,
+      directionConfident: hasSend || hasRecv,
+      transport: sources[0].transport,
+      definedIn: cStruct.sourceFile,
+      usedIn: [],
+      fileRoles: dedupedRoles,
+    });
+    allExistingNames.add(structName);
+  }
+
+  return [...defineBasedInterfaces, ...uniqueStructInterfaces, ...ipcArgInterfaces, ...impliedStructInterfaces];
 }

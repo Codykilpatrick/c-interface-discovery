@@ -271,7 +271,7 @@ export async function analyzeSource(
     // Continue
   }
 
-  // ── Custom pattern matching ────────────────────────────────────────────
+  // ── Custom pattern matching (regex pass — counts occurrences) ─────────
   for (const pattern of patterns) {
     try {
       const re = new RegExp(pattern.pattern, 'g');
@@ -287,6 +287,97 @@ export async function analyzeSource(
       }
     } catch {
       // Invalid regex — ignore
+    }
+  }
+
+  // ── Custom pattern deep extraction (tree-sitter pass) ─────────────────
+  // For each call expression matching a custom pattern:
+  //   Strategy A — extract ALL_CAPS argument identifiers as message constants
+  //   Strategy B — walk up to the containing function and inspect its parameter types
+  if (patterns.length > 0) {
+    try {
+      const callWithArgsQuery = lang.query(`
+        (call_expression
+          function: (identifier) @callee
+          arguments: (argument_list) @args)
+      `);
+      const ALL_CAPS_RE = /^[A-Z][A-Z0-9_]+$/;
+
+      const defineNames = new Set(typeDict.defines.map((d) => d.name));
+      const structNames = new Set(typeDict.structs.map((s) => s.name));
+
+      for (const match of callWithArgsQuery.matches(root)) {
+        const calleeCapture = match.captures.find((c) => c.name === 'callee');
+        const argsCapture   = match.captures.find((c) => c.name === 'args');
+        if (!calleeCapture) continue;
+
+        const calleeName = nodeText(calleeCapture.node);
+
+        // Find which custom pattern(s) this call matches
+        for (const pattern of patterns) {
+          let patternMatches = false;
+          try { patternMatches = new RegExp(pattern.pattern).test(calleeName); } catch { continue; }
+          if (!patternMatches) continue;
+
+          // Find the already-pushed IpcCall for this pattern (matched by type + direction + externalName)
+          const existingCall = ipc.find(
+            (c) => c.type === pattern.ipcType
+              && c.direction === pattern.direction
+              && c.isExternal === pattern.isExternal
+              && c.externalName === pattern.externalName
+          );
+          if (!existingCall) continue;
+
+          // Strategy A: argument constant extraction
+          if (argsCapture) {
+            for (const argChild of argsCapture.node.children) {
+              if (argChild.type !== 'identifier') continue;
+              const argText = nodeText(argChild);
+              if (!ALL_CAPS_RE.test(argText)) continue;
+              if (defineNames.has(argText)) {
+                existingCall.msgConstants = existingCall.msgConstants ?? [];
+                if (!existingCall.msgConstants.includes(argText)) {
+                  existingCall.msgConstants.push(argText);
+                }
+              } else {
+                existingCall.missingConstants = existingCall.missingConstants ?? [];
+                if (!existingCall.missingConstants.includes(argText)) {
+                  existingCall.missingConstants.push(argText);
+                }
+              }
+            }
+          }
+
+          // Strategy B: walk up AST to containing function_definition and check param types
+          let node: import('web-tree-sitter').SyntaxNode | null = calleeCapture.node.parent;
+          while (node && node.type !== 'function_definition') {
+            node = node.parent;
+          }
+          if (node && node.type === 'function_definition') {
+            const declaratorNode = node.childForFieldName('declarator');
+            const paramsNode = declaratorNode?.childForFieldName('parameters');
+            if (paramsNode) {
+              for (const paramChild of paramsNode.children) {
+                if (paramChild.type !== 'parameter_declaration') continue;
+                const typeNode = paramChild.childForFieldName('type') ?? paramChild.children[0];
+                if (!typeNode) continue;
+                const rawType = nodeText(typeNode)
+                  .replace(/\bconst\b|\bvolatile\b|\bstruct\b|\bunion\b/g, '')
+                  .replace(/\*/g, '')
+                  .trim();
+                if (rawType && structNames.has(rawType)) {
+                  existingCall.impliedStructs = existingCall.impliedStructs ?? [];
+                  if (!existingCall.impliedStructs.includes(rawType)) {
+                    existingCall.impliedStructs.push(rawType);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // tree-sitter query failure — non-fatal
     }
   }
 
