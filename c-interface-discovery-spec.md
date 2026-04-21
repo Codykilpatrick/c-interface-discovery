@@ -420,7 +420,7 @@ interface CustomPattern {
   pattern: string      // regex e.g. "torpedo_dispatch\\s*\\("
   ipcType: IpcType
   direction: 'send' | 'recv' | 'bidirectional'
-  notes: string        // e.g. "Found in dcm_bridge.c line 412, wraps write()"
+  notes: string        // e.g. "Found in acm_bridge.c line 412, wraps write()"
 }
 ```
 
@@ -461,7 +461,7 @@ interface CustomPattern {
 Each loaded file shown as a row:
 ```
 sensor_defs.h  [string-header]  [4.2 KB]  [UTF-8]        ✕
-slemr_sensor.c [source]         [12.1 KB] [Latin-1 ⚠]   ✕
+hydra_sensor.c [source]         [12.1 KB] [Latin-1 ⚠]   ✕
 ```
 - ✕ button removes file from registry and triggers reanalysis
 - ⚠ badge for encoding, oversized, or conditional symbol warnings
@@ -483,7 +483,7 @@ Shown at top of results when any AnalysisWarning exists:
 |------|----------------|
 | `collision` | `types.h exists in both zones — string-local version takes precedence` |
 | `conflict` | `struct SensorMessage defined differently in sensor_defs.h and acoustic_types.h` |
-| `encoding` | `dcm_bridge.c decoded as Latin-1 — verify special characters` |
+| `encoding` | `acm_bridge.c decoded as Latin-1 — verify special characters` |
 | `oversized` | `radar_proc.c is 1.2MB — analysis may be slow` |
 | `circular-include` | `Circular include detected: sensor_defs.h → acoustic_types.h → sensor_defs.h` |
 | `ifdef-variant` | `SensorStatus has multiple conditional definitions — active branch depends on build flags` |
@@ -506,7 +506,7 @@ For each MessageInterface in the current file:
 │    AcousticSample  sample                                    │
 │  }                  defined in: acoustic_types.h             │
 │                                                              │
-│  referenced in: slemr_sensor.c                               │
+│  referenced in: hydra_sensor.c                               │
 └──────────────────────────────────────────────────────────────┘
 
 ⚠ Struct not resolved — may be in an unloaded header
