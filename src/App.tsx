@@ -379,6 +379,45 @@ export default function App() {
     downloadBlob(msgStructRegistry.exportAsJson(), 'application/json', 'cid-msg-struct-patterns.json');
   }
 
+  function handleExportConfig() {
+    const config = JSON.stringify({
+      version: 1,
+      customPatterns: patternRegistry.getAll(),
+      msgStructPatterns: msgStructRegistry.getAll(),
+    }, null, 2);
+    downloadBlob(config, 'application/json', 'cid-config.json');
+  }
+
+  function handleImportConfig(json: string) {
+    try {
+      const parsed = JSON.parse(json);
+      // Combined format: { version, customPatterns, msgStructPatterns }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        if (Array.isArray(parsed.customPatterns)) {
+          patternRegistry.importPatterns(parsed.customPatterns as CustomPattern[]);
+          setPatterns(patternRegistry.getAll());
+        }
+        if (Array.isArray(parsed.msgStructPatterns)) {
+          msgStructRegistry.importPatterns(parsed.msgStructPatterns as MsgStructPattern[]);
+          setMsgStructPatterns(msgStructRegistry.getAll());
+        }
+        return;
+      }
+      // Legacy: plain array — detect type by shape
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        if ('ipcType' in parsed[0]) {
+          patternRegistry.importPatterns(parsed as CustomPattern[]);
+          setPatterns(patternRegistry.getAll());
+        } else {
+          msgStructRegistry.importPatterns(parsed as MsgStructPattern[]);
+          setMsgStructPatterns(msgStructRegistry.getAll());
+        }
+      }
+    } catch {
+      alert('Invalid config file — expected JSON');
+    }
+  }
+
   function handleExportTxt(analysis: StringAnalysis, appName: string) {
     const lines: string[] = [];
     lines.push(`C Interface Discovery — ${appName}`);
@@ -560,6 +599,8 @@ export default function App() {
             onRemoveMsgStructPattern={handleRemoveMsgStructPattern}
             onImportMsgStructPatterns={handleImportMsgStructPatterns}
             onExportMsgStructPatterns={handleExportMsgStructPatterns}
+            onExportConfig={handleExportConfig}
+            onImportConfig={handleImportConfig}
             onDetectMsgStructs={handleDetectMsgStructs}
             msgStructPrefill={msgStructPrefill}
             msgStructMatchCounts={msgStructMatchCounts}
@@ -659,9 +700,12 @@ export default function App() {
 
             {/* Custom patterns */}
             <div className="mt-8 border-t border-gray-800 pt-6">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-                Custom Patterns
-              </h2>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+                  Custom Patterns
+                </h2>
+                <ConfigButtons onExport={handleExportConfig} onImport={handleImportConfig} />
+              </div>
               <div className="space-y-2">
                 <PatternRegistryUI
                   patterns={patterns}
@@ -835,6 +879,43 @@ function CrossAppSummary({ applications }: { applications: ApplicationGroup[] })
 
 // ── Drill-down view ───────────────────────────────────────────────────────────
 
+// ── Config export/import buttons ──────────────────────────────────────────────
+
+function ConfigButtons({ onExport, onImport }: { onExport: () => void; onImport: (json: string) => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => onImport(ev.target?.result as string);
+    reader.readAsText(file);
+    e.target.value = '';
+  }
+
+  return (
+    <div className="flex gap-2">
+      <button
+        className="px-2.5 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 rounded transition-colors"
+        onClick={onExport}
+        title="Export all custom patterns and struct patterns as a single config file"
+      >
+        ↓ Export Config
+      </button>
+      <button
+        className="px-2.5 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 rounded transition-colors"
+        onClick={() => ref.current?.click()}
+        title="Import config file (restores custom patterns and struct patterns)"
+      >
+        ↑ Import Config
+      </button>
+      <input ref={ref} type="file" accept=".json" className="hidden" onChange={handleFile} />
+    </div>
+  );
+}
+
+// ── Drill-down view ───────────────────────────────────────────────────────────
+
 interface DrillDownViewProps {
   app: ApplicationGroup;
   analysis: StringAnalysis | null;
@@ -862,6 +943,8 @@ interface DrillDownViewProps {
   onRemoveMsgStructPattern: (id: string) => void;
   onImportMsgStructPatterns: (imported: MsgStructPattern[]) => void;
   onExportMsgStructPatterns: () => void;
+  onExportConfig: () => void;
+  onImportConfig: (json: string) => void;
   onDetectMsgStructs: () => number;
   msgStructPrefill: string | undefined;
   msgStructMatchCounts: Map<string, number>;
@@ -894,6 +977,8 @@ function DrillDownView({
   onRemoveMsgStructPattern,
   onImportMsgStructPatterns,
   onExportMsgStructPatterns,
+  onExportConfig,
+  onImportConfig,
   onDetectMsgStructs,
   msgStructPrefill,
   msgStructMatchCounts,
@@ -979,9 +1064,12 @@ function DrillDownView({
 
           {/* Custom patterns */}
           <div className="mt-8 border-t border-gray-800 pt-6">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-              Custom Patterns
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+                Custom Patterns
+              </h2>
+              <ConfigButtons onExport={onExportConfig} onImport={onImportConfig} />
+            </div>
             <div className="space-y-2">
               <PatternRegistryUI
                 patterns={patterns}

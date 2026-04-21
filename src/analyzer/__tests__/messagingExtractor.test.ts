@@ -270,7 +270,7 @@ describe('messagingExtractor — struct patterns', () => {
     expect(result[0].fileRoles[0].filename).toBe('solo.c');
   });
 
-  it('does not duplicate when struct name also exists as a define-based entry', () => {
+  it('does not duplicate when struct name also exists as a define-based entry, define wins', () => {
     // Hypothetical: a define named SONAR_DATA (unlikely but must be handled)
     const struct = makeStruct('SONAR_DATA', 'sonar.h');
     const defines: CDefine[] = [
@@ -288,5 +288,219 @@ describe('messagingExtractor — struct patterns', () => {
     const matches = result.filter((m) => m.msgTypeConstant === 'SONAR_DATA');
     expect(matches).toHaveLength(1);
     expect(matches[0].msgTypeValue).not.toBe('(struct)'); // came from define, not struct path
+  });
+});
+
+// ── Strategy A: IpcCall.msgConstants ─────────────────────────────────────────
+
+describe('messagingExtractor — Strategy A (IPC call argument constants)', () => {
+  it('creates MessageInterface for a non-standard constant found in IpcCall.msgConstants', () => {
+    // SLEMR_MSG_SONAR has no MSG_TYPE_ prefix — would be missed by normal define scanning
+    const defines: CDefine[] = [
+      { name: 'SLEMR_MSG_SONAR', value: '0x10', category: 'protocol', sourceFile: 'slemr.h', conditional: false },
+    ];
+    const analyses = [
+      makeAnalysis('sonar.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['SLEMR_MSG_SONAR'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict(defines), []);
+    const iface = result.find((m) => m.msgTypeConstant === 'SLEMR_MSG_SONAR');
+    expect(iface).toBeDefined();
+    expect(iface!.msgTypeValue).toBe('0x10');
+    expect(iface!.direction).toBe('producer');
+    expect(iface!.directionConfident).toBe(true);
+    expect(iface!.transport).toBe('custom');
+  });
+
+  it('resolves struct from msgConstant via candidateStructNames when name matches a candidate', () => {
+    // candidateStructNames strips MSG_TYPE_ prefix: MSG_TYPE_SONAR → Sonar, SonarMsg, ...
+    const defines: CDefine[] = [
+      { name: 'MSG_TYPE_SONAR', value: '0x10', category: 'protocol', sourceFile: 'slemr.h', conditional: false },
+    ];
+    const struct = makeStruct('SonarMsg', 'slemr.h');
+    const analyses = [
+      makeAnalysis('sonar.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['MSG_TYPE_SONAR'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict(defines, [struct]), []);
+    const iface = result.find((m) => m.msgTypeConstant === 'MSG_TYPE_SONAR');
+    // MSG_TYPE_SONAR → Sonar → SonarMsg is a candidate
+    expect(iface?.struct?.name).toBe('SonarMsg');
+    expect(iface?.structResolved).toBe(true);
+  });
+
+  it('leaves struct unresolved for non-standard prefix constants with no matching candidate', () => {
+    // SLEMR_MSG_SONAR → candidates: SlemrMsgSonar, SlemrMsgSonarMsg, ... — unlikely to match
+    const defines: CDefine[] = [
+      { name: 'SLEMR_MSG_SONAR', value: '0x10', category: 'protocol', sourceFile: 'slemr.h', conditional: false },
+    ];
+    const analyses = [
+      makeAnalysis('sonar.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['SLEMR_MSG_SONAR'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict(defines), []);
+    const iface = result.find((m) => m.msgTypeConstant === 'SLEMR_MSG_SONAR');
+    expect(iface).toBeDefined();
+    expect(iface!.structResolved).toBe(false); // no matching struct — Strategy B needed
+    expect(iface!.msgTypeValue).toBe('0x10');  // define value still present
+  });
+
+  it('creates stub entry with "(definition not found)" for missingConstants', () => {
+    const analyses = [
+      makeAnalysis('sender.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', missingConstants: ['UNDEFINED_MSG'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict(), []);
+    const iface = result.find((m) => m.msgTypeConstant === 'UNDEFINED_MSG');
+    expect(iface).toBeDefined();
+    expect(iface!.msgTypeValue).toBe('(definition not found)');
+    expect(iface!.struct).toBeNull();
+    expect(iface!.structResolved).toBe(false);
+    expect(iface!.direction).toBe('producer');
+  });
+
+  it('augments existing define-based interface direction when was unknown', () => {
+    const defines: CDefine[] = [
+      { name: 'MSG_TYPE_ACOUSTIC', value: '0x01', category: 'protocol', sourceFile: 'types.h', conditional: false },
+    ];
+    // No source files → findReferences returns empty → direction unknown
+    const analyses = [
+      makeAnalysis('wrapper.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['MSG_TYPE_ACOUSTIC'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict(defines), []);
+    const iface = result.find((m) => m.msgTypeConstant === 'MSG_TYPE_ACOUSTIC');
+    expect(iface).toBeDefined();
+    expect(iface!.directionConfident).toBe(true);
+    expect(iface!.direction).toBe('producer');
+  });
+
+  it('merges producer + consumer fileRoles across files for same constant', () => {
+    const defines: CDefine[] = [
+      { name: 'SLEMR_MSG_TRACK', value: '0x11', category: 'protocol', sourceFile: 'slemr.h', conditional: false },
+    ];
+    const analyses = [
+      makeAnalysis('producer.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['SLEMR_MSG_TRACK'],
+      }]),
+      makeAnalysis('consumer.c', [], [{
+        type: 'custom', detail: 'slemr_recv (custom pattern, 1 match)',
+        direction: 'recv', msgConstants: ['SLEMR_MSG_TRACK'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict(defines), []);
+    const matches = result.filter((m) => m.msgTypeConstant === 'SLEMR_MSG_TRACK');
+    expect(matches).toHaveLength(1);
+    const roles = matches[0].fileRoles;
+    expect(roles.find((r) => r.filename === 'producer.c')?.role).toBe('producer');
+    expect(roles.find((r) => r.filename === 'consumer.c')?.role).toBe('consumer');
+    expect(matches[0].direction).toBe('both');
+  });
+
+  it('does not duplicate when constant also appears in define-based set', () => {
+    const defines: CDefine[] = [
+      { name: 'MSG_TYPE_STATUS', value: '0x02', category: 'protocol', sourceFile: 'types.h', conditional: false },
+    ];
+    const analyses = [
+      makeAnalysis('a.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['MSG_TYPE_STATUS'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict(defines), []);
+    const matches = result.filter((m) => m.msgTypeConstant === 'MSG_TYPE_STATUS');
+    expect(matches).toHaveLength(1);
+  });
+});
+
+// ── Strategy B: IpcCall.impliedStructs ────────────────────────────────────────
+
+describe('messagingExtractor — Strategy B (wrapper function implied structs)', () => {
+  it('creates MessageInterface with structResolved=true from impliedStructs', () => {
+    const struct = makeStruct('SonarPingData', 'slemr.h');
+    const analyses = [
+      makeAnalysis('sonar_wrapper.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', impliedStructs: ['SonarPingData'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict([], [struct]), []);
+    const iface = result.find((m) => m.msgTypeConstant === 'SonarPingData');
+    expect(iface).toBeDefined();
+    expect(iface!.struct).toBe(struct);
+    expect(iface!.structResolved).toBe(true);
+    expect(iface!.msgTypeValue).toBe('(implied from wrapper)');
+    expect(iface!.direction).toBe('producer');
+    expect(iface!.directionConfident).toBe(true);
+  });
+
+  it('silently skips when implied struct is not in typeDict', () => {
+    const analyses = [
+      makeAnalysis('x.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', impliedStructs: ['NonExistentStruct'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict(), []);
+    expect(result.find((m) => m.msgTypeConstant === 'NonExistentStruct')).toBeUndefined();
+  });
+
+  it('does not duplicate when implied struct name already covered by Strategy A', () => {
+    const defines: CDefine[] = [
+      { name: 'SonarPingData', value: '0x10', category: 'other', sourceFile: 'slemr.h', conditional: false },
+    ];
+    const struct = makeStruct('SonarPingData', 'slemr.h');
+    const analyses = [
+      makeAnalysis('a.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['SonarPingData'], impliedStructs: ['SonarPingData'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict(defines, [struct]), []);
+    const matches = result.filter((m) => m.msgTypeConstant === 'SonarPingData');
+    expect(matches).toHaveLength(1);
+  });
+
+  it('sets recv direction from consumer-side wrapper', () => {
+    const struct = makeStruct('TargetTrackData', 'slemr.h');
+    const analyses = [
+      makeAnalysis('consumer.c', [], [{
+        type: 'custom', detail: 'slemr_recv (custom pattern, 1 match)',
+        direction: 'recv', impliedStructs: ['TargetTrackData'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict([], [struct]), []);
+    const iface = result.find((m) => m.msgTypeConstant === 'TargetTrackData');
+    expect(iface?.direction).toBe('consumer');
+    expect(iface?.fileRoles[0].role).toBe('consumer');
+  });
+
+  it('sets both direction when producer and consumer wrappers found in different files', () => {
+    const struct = makeStruct('WeaponsData', 'slemr.h');
+    const analyses = [
+      makeAnalysis('sender.c', [], [{
+        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        direction: 'send', impliedStructs: ['WeaponsData'],
+      }]),
+      makeAnalysis('receiver.c', [], [{
+        type: 'custom', detail: 'slemr_recv (custom pattern, 1 match)',
+        direction: 'recv', impliedStructs: ['WeaponsData'],
+      }]),
+    ];
+    const result = extractMessageInterfaces(analyses, makeTypeDict([], [struct]), []);
+    const matches = result.filter((m) => m.msgTypeConstant === 'WeaponsData');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].direction).toBe('both');
   });
 });
