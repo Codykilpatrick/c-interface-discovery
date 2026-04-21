@@ -72,7 +72,7 @@ export interface IpcCall {
   type: IpcType;
   detail: string;
   /** Explicit direction from a custom pattern — overrides type-based heuristics. */
-  direction?: 'send' | 'recv' | 'bidirectional';
+  direction?: 'send' | 'recv' | 'bidirectional' | 'control';
   /** If true, always draw an edge to an external node regardless of other edges. */
   isExternal?: boolean;
   /** Name of the external system — shared across patterns with the same name. */
@@ -123,7 +123,7 @@ export interface CustomPattern {
   name: string;
   pattern: string;           // regex string
   ipcType: IpcType;
-  direction: 'send' | 'recv' | 'bidirectional';
+  direction: 'send' | 'recv' | 'bidirectional' | 'control';
   notes: string;
   /** Always draw an edge to an external node when this pattern matches. */
   isExternal?: boolean;

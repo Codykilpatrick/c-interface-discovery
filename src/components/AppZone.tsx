@@ -107,6 +107,7 @@ export default function AppZone({
           label={analyzing ? 'Analyzing…' : 'SOURCE FILES'}
           accept=".c,.h,.cpp"
           description="Drop .c and .h files"
+          allowDirectory
         />
       </div>
 

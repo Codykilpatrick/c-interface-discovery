@@ -7,15 +7,22 @@ interface DropZoneProps {
   label: string;
   accept: string;
   description: string;
+  allowDirectory?: boolean;
 }
 
-export default function DropZone({ zone: _zone, onFiles, label, accept, description }: DropZoneProps) {
+export default function DropZone({ zone: _zone, onFiles, label, accept, description, allowDirectory }: DropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const dirInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+
+  const ACCEPT_EXTS = accept.split(',').map((s) => s.trim().toLowerCase());
 
   function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    onFiles(Array.from(files));
+    const filtered = Array.from(files).filter((f) =>
+      ACCEPT_EXTS.some((ext) => f.name.toLowerCase().endsWith(ext))
+    );
+    onFiles(filtered);
   }
 
   function onDragOver(e: React.DragEvent) {
@@ -49,12 +56,34 @@ export default function DropZone({ zone: _zone, onFiles, label, accept, descript
         accept={accept}
         className="hidden"
         onChange={(e) => handleFiles(e.target.files)}
-        // Reset input so re-dropping same file triggers onChange
         onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
       />
+      {allowDirectory && (
+        <input
+          ref={dirInputRef}
+          type="file"
+          className="hidden"
+          // @ts-expect-error webkitdirectory is not in React's typings
+          webkitdirectory=""
+          multiple
+          onChange={(e) => handleFiles(e.target.files)}
+          onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
+        />
+      )}
       <div className="text-sm font-semibold text-gray-300 mb-1">{label}</div>
       <div className="text-xs text-gray-500 text-center">{description}</div>
-      <div className="mt-3 text-xs text-gray-600">Click to select or drag files here</div>
+      <div className="mt-3 flex items-center gap-3">
+        <span className="text-xs text-gray-600">Click to select or drag files here</span>
+        {allowDirectory && (
+          <button
+            type="button"
+            className="text-xs text-gray-600 hover:text-gray-400 underline underline-offset-2 transition-colors"
+            onClick={(e) => { e.stopPropagation(); dirInputRef.current?.click(); }}
+          >
+            or ingest directory
+          </button>
+        )}
+      </div>
     </div>
   );
 }

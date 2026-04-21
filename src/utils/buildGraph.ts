@@ -159,7 +159,7 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
   function ipcIsSend(ipcCall: { detail: string; type: IpcType; direction?: string }): boolean {
     const callName = ipcCall.detail.split('(')[0].trim().toLowerCase();
     return SEND_CALL_NAMES.has(callName) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue'
-      || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional';
+      || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional' || ipcCall.direction === 'control';
   }
 
   function ipcIsRecv(ipcCall: { detail: string; type: IpcType; direction?: string }): boolean {
@@ -197,8 +197,11 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
         });
       }
 
-      if (ipcIsSend(ipcCall)) addExternalEdge(fa.filename, nodeId, ipcCall.type, true);
-      if (ipcIsRecv(ipcCall)) addExternalEdge(nodeId, fa.filename, ipcCall.type, true);
+      // For isExternal calls, use direction directly — same logic as buildAppGraph
+      const extIsSend = ipcCall.direction !== 'recv';
+      const extIsRecv = ipcCall.direction === 'recv' || ipcCall.direction === 'bidirectional';
+      if (extIsSend) addExternalEdge(fa.filename, nodeId, ipcCall.type, true);
+      if (extIsRecv) addExternalEdge(nodeId, fa.filename, ipcCall.type, true);
     }
 
     // Pass 2: standard (non-isExternal) IPC calls — add generic ? External edge only
@@ -246,7 +249,7 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
   g.setGraph({ rankdir, nodesep, ranksep, align: 'DL' });
 
   for (const node of nodeMap.values()) {
-    const isExternal = node.id === EXTERNAL_NODE_ID;
+    const isExternal = node.type === 'externalNode';
     g.setNode(node.id, {
       width:  isExternal ? EXTERNAL_W : NODE_W,
       height: isExternal ? EXTERNAL_H : NODE_H,
@@ -261,7 +264,7 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
   for (const node of nodeMap.values()) {
     const pos = g.node(node.id);
     if (pos) {
-      const isExternal = node.id === EXTERNAL_NODE_ID;
+      const isExternal = node.type === 'externalNode';
       const w = isExternal ? EXTERNAL_W : NODE_W;
       const h = isExternal ? EXTERNAL_H : NODE_H;
       node.position = { x: pos.x - w / 2, y: pos.y - h / 2 };

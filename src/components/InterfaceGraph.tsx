@@ -14,12 +14,13 @@ import {
   type EdgeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useMemo, useState, useEffect, useContext, createContext } from 'react';
+import { useMemo, useState, useEffect, useContext, createContext, useRef, useCallback } from 'react';
+import { toPng } from 'html-to-image';
 import { useNodesState } from '@xyflow/react';
 import type { IpcType, StringAnalysis } from '../analyzer/types';
 import {
   buildGraph,
-  EXTERNAL_NODE_ID,
+
   type EdgeDirection,
   type ExternalNode,
   type MsgEdge,
@@ -244,6 +245,30 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
   const { nodes: initialNodes, edges } = useMemo(() => buildGraph(analysis, rankdir), [analysis, rankdir]);
   const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNode | ExternalNode>(initialNodes);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!isFullscreen) containerRef.current?.requestFullscreen();
+    else document.exitFullscreen();
+  }, [isFullscreen]);
+
+  const downloadPng = useCallback(() => {
+    if (!containerRef.current) return;
+    toPng(containerRef.current, { backgroundColor: '#030712', pixelRatio: 2 })
+      .then((dataUrl) => {
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = 'interface-map.png';
+        a.click();
+      });
+  }, []);
 
   // Reset positions and selection when the analysis changes or layout direction changes
   useEffect(() => {
@@ -283,7 +308,11 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
 
   return (
     <SelectionContext.Provider value={selectionCtx}>
-      <div className="w-full rounded-lg overflow-hidden border border-gray-800" style={{ height: Math.max(520, Math.min(800, nodes.length * 60 + 120)) }}>
+      <div
+        ref={containerRef}
+        className="w-full rounded-lg overflow-hidden border border-gray-800 bg-[#030712]"
+        style={{ height: isFullscreen ? '100vh' : Math.max(520, Math.min(800, nodes.length * 60 + 120)) }}
+      >
         <ReactFlow
           nodes={nodes}
           onNodesChange={onNodesChange}
@@ -296,7 +325,7 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
           onNodeClick={(_, node) => {
             const nodeId = node.id;
             setSelectedNodeId((prev) => prev === nodeId ? null : nodeId);
-            if (nodeId !== EXTERNAL_NODE_ID) {
+            if (node.type !== 'externalNode') {
               onSelectFile(node.data.filename as string);
             }
           }}
@@ -333,7 +362,7 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
             className="!bg-gray-900 !border !border-gray-700 rounded"
           />
 
-          {/* Layout direction toggle */}
+          {/* Layout direction toggle + fullscreen + download */}
           <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 10 }} className="flex gap-1">
             {(['LR', 'TB'] as RankDir[]).map((dir) => (
               <button
@@ -349,6 +378,16 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
                 {dir === 'LR' ? '⇢ LR' : '⇣ TB'}
               </button>
             ))}
+            <button
+              onClick={downloadPng}
+              className="px-2 py-1 text-[10px] font-mono rounded border bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
+              title="Download map as PNG"
+            >↓ PNG</button>
+            <button
+              onClick={toggleFullscreen}
+              className="px-2 py-1 text-[10px] font-mono rounded border bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            >{isFullscreen ? '⊠' : '⛶'}</button>
           </div>
 
           {/* Legend */}

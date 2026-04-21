@@ -279,6 +279,7 @@ export default function PatternRegistry({
               <option value="send">send</option>
               <option value="recv">recv</option>
               <option value="bidirectional">bidirectional</option>
+              <option value="control">control</option>
             </select>
             <input
               className="col-span-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"

@@ -577,6 +577,7 @@ export default function App() {
             setActiveFile={(f) => {
               setActiveFile(f);
               setView('per-file');
+              window.scrollTo({ top: 0, behavior: 'instant' });
             }}
             activeFileAnalysis={activeFileAnalysis}
             activeFileStructs={activeFileStructs}
@@ -647,6 +648,7 @@ export default function App() {
                   label="EXTERNAL INCLUDES"
                   accept=".h"
                   description="Drop shared include directory files here (.h only)"
+                  allowDirectory
                 />
                 {externalFiles.length > 0 && (
                   <div className="flex justify-end mt-1.5">
@@ -688,6 +690,7 @@ export default function App() {
                     setSelectedAppId(appId);
                     setActiveFile(null);
                     setView('interfaces');
+                    window.scrollTo({ top: 0, behavior: 'instant' });
                   }}
                 />
               </div>

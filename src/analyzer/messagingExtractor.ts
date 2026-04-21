@@ -277,7 +277,7 @@ export function extractMessageInterfaces(
   // constants in missingConstants get a "definition not found" stub entry.
   interface ConstantSource {
     filename: string;
-    direction: 'send' | 'recv' | 'bidirectional';
+    direction: 'send' | 'recv' | 'bidirectional' | 'control';
     transport: IpcType;
     missing: boolean;
   }
@@ -310,7 +310,7 @@ export function extractMessageInterfaces(
     if (allExistingNames.has(constant)) {
       const existing = defineBasedInterfaces.find((m) => m.msgTypeConstant === constant);
       if (existing && !existing.directionConfident) {
-        const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional');
+        const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional' || s.direction === 'control');
         const hasRecv = sources.some((s) => s.direction === 'recv' || s.direction === 'bidirectional');
         if (hasSend || hasRecv) {
           existing.direction = hasSend && hasRecv ? 'both' : hasSend ? 'producer' : 'consumer';
@@ -320,7 +320,7 @@ export function extractMessageInterfaces(
         // Merge fileRoles from IPC call sources
         for (const src of sources) {
           if (!existing.fileRoles.some((r) => r.filename === src.filename)) {
-            const role = src.direction === 'send' ? 'producer' : src.direction === 'recv' ? 'consumer' : 'both';
+            const role = (src.direction === 'send' || src.direction === 'control') ? 'producer' : src.direction === 'recv' ? 'consumer' : 'both';
             existing.fileRoles.push({ filename: src.filename, role });
           }
         }
@@ -332,13 +332,13 @@ export function extractMessageInterfaces(
     const struct = isMissing ? null : resolveStruct(constant, typeDict);
     const allRefs = isMissing ? [] : filesUsingConstant(constant, analyses, sourceFiles);
 
-    const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional');
+    const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional' || s.direction === 'control');
     const hasRecv = sources.some((s) => s.direction === 'recv' || s.direction === 'bidirectional');
     const direction: MsgDirection = hasSend && hasRecv ? 'both' : hasSend ? 'producer' : hasRecv ? 'consumer' : 'unknown';
 
     const fileRoles: MsgFileRole[] = sources.map((s) => ({
       filename: s.filename,
-      role: s.direction === 'send' ? 'producer' : s.direction === 'recv' ? 'consumer' : 'both',
+      role: (s.direction === 'send' || s.direction === 'control') ? 'producer' : s.direction === 'recv' ? 'consumer' : 'both',
     }));
     // Deduplicate fileRoles by filename (keep first)
     const seenFiles = new Set<string>();
@@ -363,7 +363,7 @@ export function extractMessageInterfaces(
   // Collect (structName, file, direction) from IpcCall.impliedStructs
   interface StructSource {
     filename: string;
-    direction: 'send' | 'recv' | 'bidirectional';
+    direction: 'send' | 'recv' | 'bidirectional' | 'control';
     transport: IpcType;
   }
   const structSources = new Map<string, StructSource[]>();
@@ -390,7 +390,7 @@ export function extractMessageInterfaces(
     const cStruct = typeDict.structs.find((s) => s.name === structName) ?? null;
     if (!cStruct) continue;
 
-    const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional');
+    const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional' || s.direction === 'control');
     const hasRecv = sources.some((s) => s.direction === 'recv' || s.direction === 'bidirectional');
     const direction: MsgDirection = hasSend && hasRecv ? 'both' : hasSend ? 'producer' : hasRecv ? 'consumer' : 'unknown';
 
@@ -399,7 +399,7 @@ export function extractMessageInterfaces(
       .filter((s) => { const seen = seenFiles2.has(s.filename); seenFiles2.add(s.filename); return !seen; })
       .map((s) => ({
         filename: s.filename,
-        role: s.direction === 'send' ? 'producer' : s.direction === 'recv' ? 'consumer' : 'both' as const,
+        role: (s.direction === 'send' || s.direction === 'control') ? 'producer' : s.direction === 'recv' ? 'consumer' : 'both' as const,
       }));
 
     impliedStructInterfaces.push({

@@ -18,6 +18,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useMemo, useState, useEffect, useContext, createContext, useRef, useCallback } from 'react';
+import { toPng } from 'html-to-image';
 import { useNodesState } from '@xyflow/react';
 import type { IpcType, MessageInterface } from '../analyzer/types';
 import {
@@ -348,7 +349,31 @@ function ApplicationGraphInner({ groups, onDrillDown }: ApplicationGraphProps) {
   } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const rfInstance = useRef<ReactFlowInstance | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const { fitView } = useReactFlow();
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!isFullscreen) containerRef.current?.requestFullscreen();
+    else document.exitFullscreen();
+  }, [isFullscreen]);
+
+  const downloadPng = useCallback(() => {
+    if (!containerRef.current) return;
+    toPng(containerRef.current, { backgroundColor: '#030712', pixelRatio: 2 })
+      .then((dataUrl) => {
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = 'application-interface-map.png';
+        a.click();
+      });
+  }, []);
 
   useEffect(() => {
     setNodes(initialNodes);
@@ -440,8 +465,9 @@ function ApplicationGraphInner({ groups, onDrillDown }: ApplicationGraphProps) {
       <SelectionCtx.Provider value={selectionCtx}>
         <EdgeClickCtx.Provider value={edgeClickCtx}>
           <div
-            className="w-full rounded-lg overflow-hidden border border-gray-800 relative"
-            style={{ height: Math.max(480, Math.min(700, nodes.length * 70 + 100)) }}
+            ref={containerRef}
+            className="w-full rounded-lg overflow-hidden border border-gray-800 relative bg-[#030712]"
+            style={{ height: isFullscreen ? '100vh' : Math.max(480, Math.min(700, nodes.length * 70 + 100)) }}
           >
             <ReactFlow
               nodes={nodes}
@@ -510,7 +536,7 @@ function ApplicationGraphInner({ groups, onDrillDown }: ApplicationGraphProps) {
                 )}
               </div>
 
-              {/* Layout toggle */}
+              {/* Layout toggle + fullscreen + download */}
               <div style={{ position: 'absolute', top: 10, right: detailPanel ? 288 : 10, zIndex: 10 }} className="flex gap-1">
                 {(['LR', 'TB'] as RankDir[]).map((dir) => (
                   <button
@@ -525,6 +551,16 @@ function ApplicationGraphInner({ groups, onDrillDown }: ApplicationGraphProps) {
                     {dir === 'LR' ? '⇢ LR' : '⇣ TB'}
                   </button>
                 ))}
+                <button
+                  onClick={downloadPng}
+                  className="px-2 py-1 text-[10px] font-mono rounded border bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
+                  title="Download map as PNG"
+                >↓ PNG</button>
+                <button
+                  onClick={toggleFullscreen}
+                  className="px-2 py-1 text-[10px] font-mono rounded border bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
+                  title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                >{isFullscreen ? '⊠' : '⛶'}</button>
               </div>
 
               {/* Legend */}
