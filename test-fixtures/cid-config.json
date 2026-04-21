@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "_comment": "Import this config before loading any synthetic test fixtures. The standard fixtures (synthetic-array, synthetic-wcs, synthetic-broker) use MSG_TYPE_* constants and standard IPC calls that resolve automatically with no config. The synthetic-titan fixture uses a custom IPC bus with non-standard TITAN_MSG_* constants that require the patterns below.",
+  "customPatterns": [
+    {
+      "id": "titan-send",
+      "name": "titan_send_message",
+      "pattern": "titan_send_message\\s*\\(",
+      "ipcType": "custom",
+      "direction": "send",
+      "notes": "TITAN bus send path. Arg 2 is a TITAN_MSG_* constant (Strategy A); arg 4 is a typed data pointer — infer struct from the enclosing wrapper function parameter (Strategy B).",
+      "isExternal": false
+    },
+    {
+      "id": "titan-recv",
+      "name": "titan_recv_message",
+      "pattern": "titan_recv_message\\s*\\(",
+      "ipcType": "custom",
+      "direction": "recv",
+      "notes": "TITAN bus receive path. Arg 4 is the typed output buffer; Strategy B infers the struct from the wrapper function's parameter type.",
+      "isExternal": false
+    }
+  ],
+  "msgStructPatterns": [
+    {
+      "id": "titan-sonar-ping",
+      "name": "SonarPingData",
+      "pattern": "^SonarPingData$"
+    },
+    {
+      "id": "titan-target-track",
+      "name": "TargetTrackData",
+      "pattern": "^TargetTrackData$"
+    },
+    {
+      "id": "titan-weapons-release",
+      "name": "WeaponsReleaseData",
+      "pattern": "^WeaponsReleaseData$"
+    },
+    {
+      "id": "wcs-mq-envelope",
+      "name": "MqTargetLock",
+      "pattern": "^MqTargetLock$"
+    },
+    {
+      "id": "broker-routing-envelope",
+      "name": "RoutingMsg",
+      "pattern": "^RoutingMsg$"
+    }
+  ]
+}

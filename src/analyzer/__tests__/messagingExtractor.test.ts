@@ -295,18 +295,18 @@ describe('messagingExtractor — struct patterns', () => {
 
 describe('messagingExtractor — Strategy A (IPC call argument constants)', () => {
   it('creates MessageInterface for a non-standard constant found in IpcCall.msgConstants', () => {
-    // SLEMR_MSG_SONAR has no MSG_TYPE_ prefix — would be missed by normal define scanning
+    // TITAN_MSG_SONAR has no MSG_TYPE_ prefix — would be missed by normal define scanning
     const defines: CDefine[] = [
-      { name: 'SLEMR_MSG_SONAR', value: '0x10', category: 'protocol', sourceFile: 'slemr.h', conditional: false },
+      { name: 'TITAN_MSG_SONAR', value: '0x10', category: 'protocol', sourceFile: 'titan.h', conditional: false },
     ];
     const analyses = [
       makeAnalysis('sonar.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
-        direction: 'send', msgConstants: ['SLEMR_MSG_SONAR'],
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['TITAN_MSG_SONAR'],
       }]),
     ];
     const result = extractMessageInterfaces(analyses, makeTypeDict(defines), []);
-    const iface = result.find((m) => m.msgTypeConstant === 'SLEMR_MSG_SONAR');
+    const iface = result.find((m) => m.msgTypeConstant === 'TITAN_MSG_SONAR');
     expect(iface).toBeDefined();
     expect(iface!.msgTypeValue).toBe('0x10');
     expect(iface!.direction).toBe('producer');
@@ -317,12 +317,12 @@ describe('messagingExtractor — Strategy A (IPC call argument constants)', () =
   it('resolves struct from msgConstant via candidateStructNames when name matches a candidate', () => {
     // candidateStructNames strips MSG_TYPE_ prefix: MSG_TYPE_SONAR → Sonar, SonarMsg, ...
     const defines: CDefine[] = [
-      { name: 'MSG_TYPE_SONAR', value: '0x10', category: 'protocol', sourceFile: 'slemr.h', conditional: false },
+      { name: 'MSG_TYPE_SONAR', value: '0x10', category: 'protocol', sourceFile: 'titan.h', conditional: false },
     ];
-    const struct = makeStruct('SonarMsg', 'slemr.h');
+    const struct = makeStruct('SonarMsg', 'titan.h');
     const analyses = [
       makeAnalysis('sonar.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
         direction: 'send', msgConstants: ['MSG_TYPE_SONAR'],
       }]),
     ];
@@ -334,18 +334,18 @@ describe('messagingExtractor — Strategy A (IPC call argument constants)', () =
   });
 
   it('leaves struct unresolved for non-standard prefix constants with no matching candidate', () => {
-    // SLEMR_MSG_SONAR → candidates: SlemrMsgSonar, SlemrMsgSonarMsg, ... — unlikely to match
+    // TITAN_MSG_SONAR → candidates: titanMsgSonar, titanMsgSonarMsg, ... — unlikely to match
     const defines: CDefine[] = [
-      { name: 'SLEMR_MSG_SONAR', value: '0x10', category: 'protocol', sourceFile: 'slemr.h', conditional: false },
+      { name: 'TITAN_MSG_SONAR', value: '0x10', category: 'protocol', sourceFile: 'titan.h', conditional: false },
     ];
     const analyses = [
       makeAnalysis('sonar.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
-        direction: 'send', msgConstants: ['SLEMR_MSG_SONAR'],
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['TITAN_MSG_SONAR'],
       }]),
     ];
     const result = extractMessageInterfaces(analyses, makeTypeDict(defines), []);
-    const iface = result.find((m) => m.msgTypeConstant === 'SLEMR_MSG_SONAR');
+    const iface = result.find((m) => m.msgTypeConstant === 'TITAN_MSG_SONAR');
     expect(iface).toBeDefined();
     expect(iface!.structResolved).toBe(false); // no matching struct — Strategy B needed
     expect(iface!.msgTypeValue).toBe('0x10');  // define value still present
@@ -354,7 +354,7 @@ describe('messagingExtractor — Strategy A (IPC call argument constants)', () =
   it('creates stub entry with "(definition not found)" for missingConstants', () => {
     const analyses = [
       makeAnalysis('sender.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
         direction: 'send', missingConstants: ['UNDEFINED_MSG'],
       }]),
     ];
@@ -374,7 +374,7 @@ describe('messagingExtractor — Strategy A (IPC call argument constants)', () =
     // No source files → findReferences returns empty → direction unknown
     const analyses = [
       makeAnalysis('wrapper.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
         direction: 'send', msgConstants: ['MSG_TYPE_ACOUSTIC'],
       }]),
     ];
@@ -387,20 +387,20 @@ describe('messagingExtractor — Strategy A (IPC call argument constants)', () =
 
   it('merges producer + consumer fileRoles across files for same constant', () => {
     const defines: CDefine[] = [
-      { name: 'SLEMR_MSG_TRACK', value: '0x11', category: 'protocol', sourceFile: 'slemr.h', conditional: false },
+      { name: 'TITAN_MSG_TRACK', value: '0x11', category: 'protocol', sourceFile: 'titan.h', conditional: false },
     ];
     const analyses = [
       makeAnalysis('producer.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
-        direction: 'send', msgConstants: ['SLEMR_MSG_TRACK'],
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
+        direction: 'send', msgConstants: ['TITAN_MSG_TRACK'],
       }]),
       makeAnalysis('consumer.c', [], [{
-        type: 'custom', detail: 'slemr_recv (custom pattern, 1 match)',
-        direction: 'recv', msgConstants: ['SLEMR_MSG_TRACK'],
+        type: 'custom', detail: 'titan_recv (custom pattern, 1 match)',
+        direction: 'recv', msgConstants: ['TITAN_MSG_TRACK'],
       }]),
     ];
     const result = extractMessageInterfaces(analyses, makeTypeDict(defines), []);
-    const matches = result.filter((m) => m.msgTypeConstant === 'SLEMR_MSG_TRACK');
+    const matches = result.filter((m) => m.msgTypeConstant === 'TITAN_MSG_TRACK');
     expect(matches).toHaveLength(1);
     const roles = matches[0].fileRoles;
     expect(roles.find((r) => r.filename === 'producer.c')?.role).toBe('producer');
@@ -414,7 +414,7 @@ describe('messagingExtractor — Strategy A (IPC call argument constants)', () =
     ];
     const analyses = [
       makeAnalysis('a.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
         direction: 'send', msgConstants: ['MSG_TYPE_STATUS'],
       }]),
     ];
@@ -428,10 +428,10 @@ describe('messagingExtractor — Strategy A (IPC call argument constants)', () =
 
 describe('messagingExtractor — Strategy B (wrapper function implied structs)', () => {
   it('creates MessageInterface with structResolved=true from impliedStructs', () => {
-    const struct = makeStruct('SonarPingData', 'slemr.h');
+    const struct = makeStruct('SonarPingData', 'titan.h');
     const analyses = [
       makeAnalysis('sonar_wrapper.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
         direction: 'send', impliedStructs: ['SonarPingData'],
       }]),
     ];
@@ -448,7 +448,7 @@ describe('messagingExtractor — Strategy B (wrapper function implied structs)',
   it('silently skips when implied struct is not in typeDict', () => {
     const analyses = [
       makeAnalysis('x.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
         direction: 'send', impliedStructs: ['NonExistentStruct'],
       }]),
     ];
@@ -458,12 +458,12 @@ describe('messagingExtractor — Strategy B (wrapper function implied structs)',
 
   it('does not duplicate when implied struct name already covered by Strategy A', () => {
     const defines: CDefine[] = [
-      { name: 'SonarPingData', value: '0x10', category: 'other', sourceFile: 'slemr.h', conditional: false },
+      { name: 'SonarPingData', value: '0x10', category: 'other', sourceFile: 'titan.h', conditional: false },
     ];
-    const struct = makeStruct('SonarPingData', 'slemr.h');
+    const struct = makeStruct('SonarPingData', 'titan.h');
     const analyses = [
       makeAnalysis('a.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
         direction: 'send', msgConstants: ['SonarPingData'], impliedStructs: ['SonarPingData'],
       }]),
     ];
@@ -473,10 +473,10 @@ describe('messagingExtractor — Strategy B (wrapper function implied structs)',
   });
 
   it('sets recv direction from consumer-side wrapper', () => {
-    const struct = makeStruct('TargetTrackData', 'slemr.h');
+    const struct = makeStruct('TargetTrackData', 'titan.h');
     const analyses = [
       makeAnalysis('consumer.c', [], [{
-        type: 'custom', detail: 'slemr_recv (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_recv (custom pattern, 1 match)',
         direction: 'recv', impliedStructs: ['TargetTrackData'],
       }]),
     ];
@@ -487,14 +487,14 @@ describe('messagingExtractor — Strategy B (wrapper function implied structs)',
   });
 
   it('sets both direction when producer and consumer wrappers found in different files', () => {
-    const struct = makeStruct('WeaponsData', 'slemr.h');
+    const struct = makeStruct('WeaponsData', 'titan.h');
     const analyses = [
       makeAnalysis('sender.c', [], [{
-        type: 'custom', detail: 'slemr_send (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_send (custom pattern, 1 match)',
         direction: 'send', impliedStructs: ['WeaponsData'],
       }]),
       makeAnalysis('receiver.c', [], [{
-        type: 'custom', detail: 'slemr_recv (custom pattern, 1 match)',
+        type: 'custom', detail: 'titan_recv (custom pattern, 1 match)',
         direction: 'recv', impliedStructs: ['WeaponsData'],
       }]),
     ];
