@@ -313,18 +313,19 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
   // ── 4. Collapse reciprocal pairs → bidirectional edges ──────────────────────
   const dropped = new Set<string>();
   for (const [key, e] of edgeMap) {
+    if (dropped.has(key)) continue;
     const reverseKey = `${e.target}→${e.source}`;
     if (edgeMap.has(reverseKey) && !dropped.has(reverseKey)) {
-      // Merge reverse edge's msgTypes and confidence into this one, then drop the reverse
-      const reverse = edgeMap.get(reverseKey)!;
-      for (const m of reverse.msgTypes) {
-        if (!e.msgTypes.includes(m)) e.msgTypes.push(m);
-      }
+      // Merge THIS edge's msgTypes INTO the reverse (kept) edge, then drop this one.
       // A collapsed pair is only truly bidirectional if at least one side had
       // confirmed IPC direction — otherwise both sides were fallback 'both' roles
       // and the edge should remain uncertain.
-      e.confident = e.confident || reverse.confident;
-      dropped.add(key); // keep the reverse key, drop this one (arbitrary but consistent)
+      const reverse = edgeMap.get(reverseKey)!;
+      for (const m of e.msgTypes) {
+        if (!reverse.msgTypes.includes(m)) reverse.msgTypes.push(m);
+      }
+      reverse.confident = reverse.confident || e.confident;
+      dropped.add(key);
     }
   }
   for (const key of dropped) edgeMap.delete(key);

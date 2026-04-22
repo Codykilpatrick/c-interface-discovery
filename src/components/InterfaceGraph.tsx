@@ -423,9 +423,12 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
   );
 
   // Build node label map for the edge click handler
+  // Depend only on id+label, not position — node drags update `nodes` but not labels.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const nodeLabels = useMemo(
     () => new Map(nodes.map((n) => [n.id, n.data.label as string])),
-    [nodes]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nodes.map((n) => `${n.id}:${n.data.label}`).join('\0')]
   );
 
   const edgeClickCtxValue = useMemo<EdgeClickCtxValue>(() => ({

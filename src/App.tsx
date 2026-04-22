@@ -233,7 +233,8 @@ export default function App() {
 
     const extFiles = externalRegistryRef.current.getAll();
     await runAnalysisForApp(appId, updatedFiles, extFiles);
-    refreshMatchCounts(updatedApps);
+    // runAnalysisForApp calls setApplications internally; read current state for match counts.
+    setApplications((prev) => { refreshMatchCounts(prev); return prev; });
     saveSession(updatedApps, extFiles);
   }
 
@@ -379,12 +380,18 @@ export default function App() {
 
     // Pass 3: candidate types from IPC wrapper params that weren't in typeDict —
     // these come from unresolved external headers. Only add if they at least appear
-    // in one source file (to avoid primitive/void false positives).
+    // in one source file and are not known primitive/standard types.
+    const PRIMITIVES = new Set([
+      'int','char','float','double','void','unsigned','signed','long','short','bool',
+      'uint8_t','uint16_t','uint32_t','uint64_t','int8_t','int16_t','int32_t','int64_t',
+      'size_t','ssize_t','ptrdiff_t','uintptr_t','intptr_t',
+    ]);
     const knownStructNames = new Set(allStructs.map((s) => s.name));
     for (const call of allIpcCalls) {
       for (const typeName of call.candidateTypes ?? []) {
         if (existingNames.has(typeName)) continue;
         if (knownStructNames.has(typeName)) continue; // already handled in pass 1
+        if (PRIMITIVES.has(typeName)) continue;
         const refs = findReferences(typeName, allSourceFiles);
         if (refs.length >= 1) {
           msgStructRegistry.add({ name: typeName, pattern: `^${typeName}$` });

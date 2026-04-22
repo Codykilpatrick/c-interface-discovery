@@ -437,13 +437,15 @@ function ApplicationGraphInner({ groups, onDrillDown }: ApplicationGraphProps) {
     [selectedNodeId, connectedEdgeIds, connectedNodeIds, searchMatchIds]
   );
 
+  // Depend only on id+label, not position — node drags update `nodes` but not labels.
   const nodeLabels = useMemo(() => {
     const m = new Map<string, string>();
     for (const node of nodes) {
       if (node.type === 'appNode') m.set(node.id, (node.data as AppNodeData).label);
     }
     return m;
-  }, [nodes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes.map((n) => `${n.id}:${(n.data as AppNodeData).label ?? ''}`).join('\0')]);
 
   const edgeClickCtx = useMemo<EdgeClickHandler>(() => ({
     onEdgeClick: (_edgeId, data, sourceLabel, targetLabel) => {

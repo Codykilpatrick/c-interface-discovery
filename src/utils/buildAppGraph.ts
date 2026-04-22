@@ -287,16 +287,18 @@ export function buildAppGraph(
   // ── 4. Collapse reciprocal pairs → bidirectional ────────────────────────────
   const dropped = new Set<string>();
   for (const [key, e] of edgeMap) {
+    if (dropped.has(key)) continue;
     const reverseKey = `${e.target}→${e.source}`;
     if (edgeMap.has(reverseKey) && !dropped.has(reverseKey)) {
+      // Merge THIS edge's data INTO the reverse (kept) edge, then drop this one.
       const reverse = edgeMap.get(reverseKey)!;
-      for (const m of reverse.msgTypes) {
-        if (!e.msgTypes.includes(m)) {
-          e.msgTypes.push(m);
-          e.interfaces.push(...reverse.interfaces.filter((i) => i.msgTypeConstant === m));
+      for (const m of e.msgTypes) {
+        if (!reverse.msgTypes.includes(m)) {
+          reverse.msgTypes.push(m);
+          reverse.interfaces.push(...e.interfaces.filter((i) => i.msgTypeConstant === m));
         }
       }
-      e.confident = e.confident || reverse.confident;
+      reverse.confident = reverse.confident || e.confident;
       dropped.add(key);
     }
   }

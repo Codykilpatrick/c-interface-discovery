@@ -315,7 +315,7 @@ export default function ExternalInterfacesSummary({ analysis, sourceFiles }: Ext
             Exported Functions ({exportedFns.length})
           </div>
           <div className="max-h-64 overflow-y-auto">
-            {exportedFns.map((item, i) => <ExportedFnRow key={i} item={item} />)}
+            {exportedFns.map((item) => <ExportedFnRow key={`${item.file}:${item.fn.name}`} item={item} />)}
           </div>
         </div>
       )}

@@ -127,8 +127,7 @@ function inferDirection(
       // systems and must not bleed into direction inference for internal interfaces.
       if (ipcCall.isExternal) continue;
       const callName = ipcCall.detail.split('(')[0].trim().toLowerCase();
-      const isSend = SEND_CALLS.has(callName) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue'
-        || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional';
+      const isSend = SEND_CALLS.has(callName) || ipcCall.type === 'socket-send' || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional';
       const isRecv = RECV_CALLS.has(callName) || ipcCall.type === 'socket-recv'
         || ipcCall.direction === 'recv' || ipcCall.direction === 'bidirectional';
       if (isSend) { hasSend = true; transport = ipcCall.type; }

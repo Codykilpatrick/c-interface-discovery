@@ -167,3 +167,46 @@ describe('buildGraph — phantom external node', () => {
     expect(phantom?.type).not.toBe(regular?.type);
   });
 });
+
+// ── Bidirectional edge collapse ───────────────────────────────────────────────
+
+describe('buildGraph — bidirectional edge collapse', () => {
+  it('collapses A→B + B→A into a single bidirectional edge', () => {
+    const msgAB = makeMsg('MSG_ALPHA', [
+      { filename: 'a.c', role: 'producer' },
+      { filename: 'b.c', role: 'consumer' },
+    ]);
+    const msgBA = makeMsg('MSG_BETA', [
+      { filename: 'b.c', role: 'producer' },
+      { filename: 'a.c', role: 'consumer' },
+    ]);
+    const { edges } = buildGraph(makeStringAnalysis(['a.c', 'b.c'], [msgAB, msgBA]));
+    expect(edges).toHaveLength(1);
+    expect(edges[0].data?.direction).toBe('bidirectional');
+  });
+
+  it('kept edge contains msgTypes from BOTH directions', () => {
+    const msgAB = makeMsg('MSG_ALPHA', [
+      { filename: 'a.c', role: 'producer' },
+      { filename: 'b.c', role: 'consumer' },
+    ]);
+    const msgBA = makeMsg('MSG_BETA', [
+      { filename: 'b.c', role: 'producer' },
+      { filename: 'a.c', role: 'consumer' },
+    ]);
+    const { edges } = buildGraph(makeStringAnalysis(['a.c', 'b.c'], [msgAB, msgBA]));
+    const edge = edges[0];
+    expect(edge.data?.msgTypes).toContain('MSG_ALPHA');
+    expect(edge.data?.msgTypes).toContain('MSG_BETA');
+  });
+
+  it('does not collapse unidirectional edges', () => {
+    const msg = makeMsg('MSG_ONE_WAY', [
+      { filename: 'a.c', role: 'producer' },
+      { filename: 'b.c', role: 'consumer' },
+    ]);
+    const { edges } = buildGraph(makeStringAnalysis(['a.c', 'b.c'], [msg]));
+    expect(edges).toHaveLength(1);
+    expect(edges[0].data?.direction).not.toBe('bidirectional');
+  });
+});

@@ -70,10 +70,7 @@ export async function analyzeString(
         typeDict.defines.push(d);
       }
     }
-    for (const w of fa.risks.filter(() => false)) {
-      // risks don't emit global warnings currently
-      void w;
-    }
+    // Note: fa.risks are not currently promoted to global warnings.
   }
 
   // Pass 4: Extract messaging interfaces (pass source files for content-based direction inference)

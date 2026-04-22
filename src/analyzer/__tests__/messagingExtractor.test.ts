@@ -619,3 +619,53 @@ describe('messagingExtractor — enum msg IDs via isExternal wrapper', () => {
     expect(producerRole!.role).toBe('producer');
   });
 });
+
+// ── Combined Strategy A + B deduplication ────────────────────────────────────
+
+describe('extractMessageInterfaces — Strategy A + B deduplication', () => {
+  it('produces exactly one MessageInterface when both msgConstants and impliedStructs name the same struct', () => {
+    // NavData is in typeDict. An IPC call lists it in BOTH msgConstants (Strategy A)
+    // and impliedStructs (Strategy B). Only one entry should result.
+    const struct = makeStruct('NavData', 'nav.h');
+    const td = makeTypeDict([], [struct]);
+
+    const ipcCall: IpcCall = {
+      type: 'socket-send',
+      detail: 'send()',
+      direction: 'send',
+      msgConstants: ['NavData'],
+      missingConstants: [],
+      impliedStructs: ['NavData'],
+      isExternal: false,
+    };
+
+    const analysis = makeAnalysis('sender.c', [], [ipcCall]);
+    const result = extractMessageInterfaces([analysis], td, []);
+
+    const navEntries = result.filter((m) => m.msgTypeConstant === 'NavData');
+    expect(navEntries).toHaveLength(1);
+  });
+
+  it('does not deduplicate when the constants are different', () => {
+    // Strategy A picks up MSG_NAV and Strategy B picks up NavData — two distinct names.
+    const struct = makeStruct('NavData', 'nav.h');
+    const td = makeTypeDict([], [struct]);
+
+    const ipcCall: IpcCall = {
+      type: 'socket-send',
+      detail: 'send()',
+      direction: 'send',
+      msgConstants: ['MSG_NAV'],
+      missingConstants: [],
+      impliedStructs: ['NavData'],
+      isExternal: false,
+    };
+
+    const analysis = makeAnalysis('sender.c', [], [ipcCall]);
+    const result = extractMessageInterfaces([analysis], td, []);
+
+    const names = result.map((m) => m.msgTypeConstant);
+    expect(names).toContain('MSG_NAV');
+    expect(names).toContain('NavData');
+  });
+});
