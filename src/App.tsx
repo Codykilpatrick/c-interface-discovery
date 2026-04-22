@@ -351,6 +351,8 @@ export default function App() {
     const allStructs = applications.flatMap((a) => a.analysis?.typeDict.structs ?? []);
     const existingNames = new Set(msgStructPatterns.map((p) => p.name));
     let added = 0;
+
+    // Pass 1: structs from typeDict that appear in 2+ source files
     for (const struct of allStructs) {
       if (existingNames.has(struct.name)) continue;
       const refs = findReferences(struct.name, allSourceFiles);
@@ -360,6 +362,38 @@ export default function App() {
         added++;
       }
     }
+
+    // Pass 2: structs implied by IPC wrapper function parameters (already resolved in typeDict)
+    // These may only appear in one file but are strong candidates since they're directly in IPC calls.
+    const allIpcCalls = applications.flatMap((a) =>
+      a.analysis?.files.flatMap((f) => f.ipc) ?? []
+    );
+    for (const call of allIpcCalls) {
+      for (const structName of call.impliedStructs ?? []) {
+        if (existingNames.has(structName)) continue;
+        msgStructRegistry.add({ name: structName, pattern: `^${structName}$` });
+        existingNames.add(structName);
+        added++;
+      }
+    }
+
+    // Pass 3: candidate types from IPC wrapper params that weren't in typeDict —
+    // these come from unresolved external headers. Only add if they at least appear
+    // in one source file (to avoid primitive/void false positives).
+    const knownStructNames = new Set(allStructs.map((s) => s.name));
+    for (const call of allIpcCalls) {
+      for (const typeName of call.candidateTypes ?? []) {
+        if (existingNames.has(typeName)) continue;
+        if (knownStructNames.has(typeName)) continue; // already handled in pass 1
+        const refs = findReferences(typeName, allSourceFiles);
+        if (refs.length >= 1) {
+          msgStructRegistry.add({ name: typeName, pattern: `^${typeName}$` });
+          existingNames.add(typeName);
+          added++;
+        }
+      }
+    }
+
     if (added > 0) setMsgStructPatterns(msgStructRegistry.getAll());
     return added;
   }

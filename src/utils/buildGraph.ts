@@ -117,6 +117,9 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
   // ── 2b. Phantom edges for one-sided messages ────────────────────────────────
   let needsPhantom = false;
 
+  // Index file analyses by filename for O(1) lookup in the loop below.
+  const fileAnalysisByName = new Map(analysis.files.map((f) => [f.filename, f]));
+
   for (const msg of analysis.messageInterfaces) {
     const producers = msg.fileRoles.filter((r) => r.role === 'producer' || r.role === 'both');
     const consumers = msg.fileRoles.filter((r) => r.role === 'consumer' || r.role === 'both');
@@ -144,11 +147,31 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
     };
 
     if (producers.length > 0 && consumers.length === 0) {
-      for (const prod of producers) addPhantomEdge(prod.filename, EXTERNAL_NODE_ID);
+      for (const prod of producers) {
+        // Skip the generic phantom edge only if this specific message constant is
+        // explicitly handled by an isExternal send call (tracked via msgConstants).
+        // A broad "any isExternal call in this file" check suppresses phantom edges
+        // for unrelated message constants in the same file.
+        const fa = fileAnalysisByName.get(prod.filename);
+        const coveredByExternal = fa?.ipc.some(
+          (c) => c.isExternal &&
+            (c.direction === 'send' || c.direction === 'bidirectional' || c.direction === 'control') &&
+            c.msgConstants?.includes(msg.msgTypeConstant)
+        );
+        if (!coveredByExternal) addPhantomEdge(prod.filename, EXTERNAL_NODE_ID);
+      }
     }
 
     if (consumers.length > 0 && producers.length === 0) {
-      for (const cons of consumers) addPhantomEdge(EXTERNAL_NODE_ID, cons.filename);
+      for (const cons of consumers) {
+        const fa = fileAnalysisByName.get(cons.filename);
+        const coveredByExternal = fa?.ipc.some(
+          (c) => c.isExternal &&
+            (c.direction === 'recv' || c.direction === 'bidirectional') &&
+            c.msgConstants?.includes(msg.msgTypeConstant)
+        );
+        if (!coveredByExternal) addPhantomEdge(EXTERNAL_NODE_ID, cons.filename);
+      }
     }
   }
 
@@ -200,8 +223,24 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
       // For isExternal calls, use direction directly — same logic as buildAppGraph
       const extIsSend = ipcCall.direction !== 'recv';
       const extIsRecv = ipcCall.direction === 'recv' || ipcCall.direction === 'bidirectional';
-      if (extIsSend) addExternalEdge(fa.filename, nodeId, ipcCall.type, true);
-      if (extIsRecv) addExternalEdge(nodeId, fa.filename, ipcCall.type, true);
+      if (extIsSend) {
+        addExternalEdge(fa.filename, nodeId, ipcCall.type, true);
+        const edge = edgeMap.get(`${fa.filename}→${nodeId}`);
+        if (edge) {
+          for (const mc of ipcCall.msgConstants ?? []) {
+            if (!edge.msgTypes.includes(mc)) edge.msgTypes.push(mc);
+          }
+        }
+      }
+      if (extIsRecv) {
+        addExternalEdge(nodeId, fa.filename, ipcCall.type, true);
+        const edge = edgeMap.get(`${nodeId}→${fa.filename}`);
+        if (edge) {
+          for (const mc of ipcCall.msgConstants ?? []) {
+            if (!edge.msgTypes.includes(mc)) edge.msgTypes.push(mc);
+          }
+        }
+      }
     }
 
     // Pass 2: standard (non-isExternal) IPC calls — add generic ? External edge only

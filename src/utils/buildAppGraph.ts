@@ -197,31 +197,48 @@ export function buildAppGraph(
       }
     }
 
-    // Phantom edges for message constants with no peer in loaded apps → generic external
+    // Phantom edges for message constants with no peer in loaded apps → generic external.
+    // Skip the phantom only if this specific constant is explicitly handled by an isExternal
+    // call in that app (tracked via msgConstants). A broad "app has any isExternal call"
+    // check incorrectly suppresses phantom edges for unrelated message constants.
     if (producers.length > 0 && consumers.length === 0) {
-      if (!nodeMap.has(APP_EXTERNAL_NODE_ID)) {
-        nodeMap.set(APP_EXTERNAL_NODE_ID, {
-          id: APP_EXTERNAL_NODE_ID,
-          type: 'appExternalNode',
-          position: { x: 0, y: 0 },
-          data: { label: '? External' },
-        });
-      }
       for (const prodId of producers) {
+        const group = analyzedGroups.find((g) => g.id === prodId);
+        const coveredByExternal = group?.analysis?.files.some((f) =>
+          f.ipc.some((c) => c.isExternal &&
+            (c.direction === 'send' || c.direction === 'bidirectional' || c.direction === 'control') &&
+            c.msgConstants?.includes(msgConst))
+        );
+        if (coveredByExternal) continue;
+        if (!nodeMap.has(APP_EXTERNAL_NODE_ID)) {
+          nodeMap.set(APP_EXTERNAL_NODE_ID, {
+            id: APP_EXTERNAL_NODE_ID,
+            type: 'appExternalNode',
+            position: { x: 0, y: 0 },
+            data: { label: '? External' },
+          });
+        }
         const iface = interfaces.get(prodId)!;
         addOrMerge(prodId, APP_EXTERNAL_NODE_ID, msgConst, iface, false);
       }
     }
     if (consumers.length > 0 && producers.length === 0) {
-      if (!nodeMap.has(APP_EXTERNAL_NODE_ID)) {
-        nodeMap.set(APP_EXTERNAL_NODE_ID, {
-          id: APP_EXTERNAL_NODE_ID,
-          type: 'appExternalNode',
-          position: { x: 0, y: 0 },
-          data: { label: '? External' },
-        });
-      }
       for (const consId of consumers) {
+        const group = analyzedGroups.find((g) => g.id === consId);
+        const coveredByExternal = group?.analysis?.files.some((f) =>
+          f.ipc.some((c) => c.isExternal &&
+            (c.direction === 'recv' || c.direction === 'bidirectional') &&
+            c.msgConstants?.includes(msgConst))
+        );
+        if (coveredByExternal) continue;
+        if (!nodeMap.has(APP_EXTERNAL_NODE_ID)) {
+          nodeMap.set(APP_EXTERNAL_NODE_ID, {
+            id: APP_EXTERNAL_NODE_ID,
+            type: 'appExternalNode',
+            position: { x: 0, y: 0 },
+            data: { label: '? External' },
+          });
+        }
         const iface = interfaces.get(consId)!;
         addOrMerge(APP_EXTERNAL_NODE_ID, consId, msgConst, iface, false);
       }

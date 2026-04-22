@@ -17,7 +17,7 @@ import '@xyflow/react/dist/style.css';
 import { useMemo, useState, useEffect, useContext, createContext, useRef, useCallback } from 'react';
 import { toPng } from 'html-to-image';
 import { useNodesState } from '@xyflow/react';
-import type { IpcType, StringAnalysis } from '../analyzer/types';
+import type { IpcType, MessageInterface, StringAnalysis } from '../analyzer/types';
 import {
   buildGraph,
 
@@ -41,6 +41,17 @@ const SelectionContext = createContext<GraphSelection>({
   selectedNodeId: null,
   connectedEdgeIds: new Set(),
   connectedNodeIds: new Set(),
+});
+
+// ── Edge click context ────────────────────────────────────────────────────────
+
+interface EdgeClickCtxValue {
+  onEdgeClick: (source: string, target: string, msgTypes: string[]) => void;
+  nodeLabels: Map<string, string>;
+}
+const EdgeClickCtx = createContext<EdgeClickCtxValue>({
+  onEdgeClick: () => {},
+  nodeLabels: new Map(),
 });
 
 // ── IPC color map (used for node badges only) ─────────────────────────────────
@@ -152,10 +163,10 @@ function ExternalNodeComponent({ selected, id, data }: NodeProps<ExternalNode>) 
 // ── Custom edge ───────────────────────────────────────────────────────────────
 
 function MsgEdgeComponent({
-  id, sourceX, sourceY, targetX, targetY,
+  id, source, target, sourceX, sourceY, targetX, targetY,
   sourcePosition, targetPosition, data, selected,
 }: EdgeProps<MsgEdge>) {
-  const [expanded, setExpanded] = useState(false);
+  const { onEdgeClick } = useContext(EdgeClickCtx);
   const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourceX, sourceY, sourcePosition,
     targetX, targetY, targetPosition,
@@ -171,6 +182,12 @@ function MsgEdgeComponent({
   const color = selected || isHighlighted ? '#e2e8f0' : DIRECTION_COLOR[direction];
   const strokeDash = direction === 'uncertain' ? '6 3' : undefined;
   const markerId = `cid-arrow-${direction}`;
+
+  function handleLabelClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!edgeData?.msgTypes) return;
+    onEdgeClick(source, target, edgeData.msgTypes);
+  }
 
   return (
     <>
@@ -203,21 +220,16 @@ function MsgEdgeComponent({
               role="button"
               style={{ borderColor: color, color: color }}
               className="bg-gray-950 border rounded px-1.5 py-0.5 text-[10px] font-mono max-w-36 text-center leading-tight cursor-pointer hover:brightness-125 transition-all select-none"
-              onClick={() => setExpanded((v) => !v)}
-              title="Click to expand"
+              onClick={handleLabelClick}
+              title="Click to view interface details"
             >
-              {(expanded ? edgeData.msgTypes : edgeData.msgTypes.slice(0, 2)).map((m) => (
+              {edgeData.msgTypes.slice(0, 2).map((m) => (
                 <div key={m} className="truncate">
                   {m.replace(/^MSG_TYPE_|^MSG_ID_|^PKT_TYPE_|^OPCODE_/, '')}
                 </div>
               ))}
-              {!expanded && edgeData.msgTypes.length > 2 && (
-                <div className="text-gray-500 hover:text-gray-400">
-                  +{edgeData.msgTypes.length - 2} more
-                </div>
-              )}
-              {expanded && edgeData.msgTypes.length > 2 && (
-                <div className="text-gray-500">▲ collapse</div>
+              {edgeData.msgTypes.length > 2 && (
+                <div className="text-gray-500">+{edgeData.msgTypes.length - 2} more</div>
               )}
             </div>
           )}
@@ -233,6 +245,106 @@ const nodeTypes: NodeTypes = {
 };
 const edgeTypes: EdgeTypes = { msgEdge: MsgEdgeComponent };
 
+// ── Interface detail panel ────────────────────────────────────────────────────
+
+function InterfaceDetailPanel({
+  sourceLabel,
+  targetLabel,
+  interfaces,
+  onClose,
+}: {
+  sourceLabel: string;
+  targetLabel: string;
+  interfaces: MessageInterface[];
+  onClose: () => void;
+}) {
+  const fmt = (s: string) => s.replace(/\.[^.]+$/, '');
+  const [selectedMsgType, setSelectedMsgType] = useState<string | null>(null);
+  return (
+    <div className="absolute right-0 top-0 h-full w-72 bg-gray-900 border-l border-gray-700 flex flex-col z-20 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-700 shrink-0">
+        <div>
+          <div className="text-xs font-semibold text-gray-200">Interface Detail</div>
+          <div className="text-[10px] text-gray-500 font-mono mt-0.5 truncate max-w-56">
+            {fmt(sourceLabel)} → {fmt(targetLabel)}
+          </div>
+        </div>
+        <button className="text-gray-600 hover:text-gray-400 text-sm shrink-0 ml-2" onClick={onClose}>✕</button>
+      </div>
+      <div className="overflow-y-auto flex-1 px-3 py-2 space-y-2">
+        {interfaces.length === 0 && (
+          <div className="text-xs text-gray-600 italic">No interface details available.</div>
+        )}
+        {interfaces.map((msg) => {
+          const isSelected = selectedMsgType === msg.msgTypeConstant;
+          return (
+          <div
+            key={msg.msgTypeConstant}
+            onClick={() => setSelectedMsgType(isSelected ? null : msg.msgTypeConstant)}
+            className={`border rounded p-2 text-xs cursor-pointer transition-colors ${
+              isSelected
+                ? 'border-blue-500/70 bg-blue-950/40'
+                : 'border-gray-700/60 hover:border-gray-600/60'
+            }`}
+          >
+            <div className="font-mono text-gray-100 font-semibold truncate">{msg.msgTypeConstant}</div>
+            <div className="flex flex-wrap gap-1.5 mt-1 items-center">
+              {msg.msgTypeValue && msg.msgTypeValue !== '(struct)' && msg.msgTypeValue !== '(implied from wrapper)' && (
+                <span className="text-gray-600 font-mono">{msg.msgTypeValue}</span>
+              )}
+              <span className={`px-1.5 py-0.5 rounded text-[10px] ${
+                msg.direction === 'producer' ? 'bg-blue-900/50 text-blue-300' :
+                msg.direction === 'consumer' ? 'bg-green-900/50 text-green-300' :
+                msg.direction === 'both'     ? 'bg-purple-900/50 text-purple-300' :
+                                               'bg-gray-800 text-gray-500'
+              }`}>{msg.direction}</span>
+              {!msg.directionConfident && (
+                <span className="text-yellow-600 text-[10px]">uncertain</span>
+              )}
+              {msg.transport && (
+                <span className="text-gray-600 text-[10px]">via {msg.transport}</span>
+              )}
+            </div>
+            {msg.struct && (
+              <div className="mt-1 text-gray-500">
+                struct <span className="text-cyan-600 font-mono">{msg.struct.name}</span>
+                {msg.struct.fields.length > 0 && (
+                  <span className="text-gray-700"> ({msg.struct.fields.length} fields)</span>
+                )}
+              </div>
+            )}
+            {!msg.struct && (
+              <div className="mt-1 text-gray-700 italic">struct unresolved</div>
+            )}
+            {msg.definedIn && (
+              <div className="mt-1 text-gray-700 font-mono text-[10px] truncate" title={msg.definedIn}>
+                defined in: {msg.definedIn.split('/').pop()}
+              </div>
+            )}
+            {msg.fileRoles.length > 0 && (
+              <div className="mt-1.5 space-y-0.5">
+                {msg.fileRoles.map((r) => (
+                  <div key={r.filename} className="flex items-center gap-1.5 text-[10px]">
+                    <span className={`px-1 py-0.5 rounded shrink-0 ${
+                      r.role === 'producer' ? 'bg-blue-900/40 text-blue-400' :
+                      r.role === 'consumer' ? 'bg-green-900/40 text-green-400' :
+                      'bg-purple-900/40 text-purple-400'
+                    }`}>{r.role}</span>
+                    <span className="font-mono text-gray-600 truncate" title={r.filename}>
+                      {r.filename.split('/').pop()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 interface InterfaceGraphProps {
@@ -246,6 +358,11 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
   const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNode | ExternalNode>(initialNodes);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [detailPanel, setDetailPanel] = useState<{
+    sourceLabel: string;
+    targetLabel: string;
+    interfaces: MessageInterface[];
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -274,6 +391,7 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
   useEffect(() => {
     setNodes(initialNodes);
     setSelectedNodeId(null);
+    setDetailPanel(null);
   }, [initialNodes, setNodes]);
 
   // Compute which edges/nodes are connected to the selected node
@@ -298,6 +416,34 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
     [selectedNodeId, connectedEdgeIds, connectedNodeIds]
   );
 
+  // Build fast lookup: msgTypeConstant → MessageInterface
+  const interfaceByConstant = useMemo(
+    () => new Map(analysis.messageInterfaces.map((m) => [m.msgTypeConstant, m])),
+    [analysis.messageInterfaces]
+  );
+
+  // Build node label map for the edge click handler
+  const nodeLabels = useMemo(
+    () => new Map(nodes.map((n) => [n.id, n.data.label as string])),
+    [nodes]
+  );
+
+  const edgeClickCtxValue = useMemo<EdgeClickCtxValue>(() => ({
+    onEdgeClick: (source: string, target: string, msgTypes: string[]) => {
+      const ifaces = msgTypes.flatMap((t) => {
+        const m = interfaceByConstant.get(t);
+        return m ? [m] : [];
+      });
+      setDetailPanel({
+        sourceLabel: nodeLabels.get(source) ?? source,
+        targetLabel: nodeLabels.get(target) ?? target,
+        interfaces: ifaces,
+      });
+      setSelectedNodeId(null);
+    },
+    nodeLabels,
+  }), [interfaceByConstant, nodeLabels]);
+
   if (nodes.length === 0) {
     return (
       <div className="flex items-center justify-center h-64 text-gray-600 text-sm">
@@ -306,105 +452,123 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
     );
   }
 
+  const panelOpen = detailPanel !== null;
+
   return (
     <SelectionContext.Provider value={selectionCtx}>
-      <div
-        ref={containerRef}
-        className="w-full rounded-lg overflow-hidden border border-gray-800 bg-[#030712]"
-        style={{ height: isFullscreen ? '100vh' : Math.max(520, Math.min(800, nodes.length * 60 + 120)) }}
-      >
-        <ReactFlow
-          nodes={nodes}
-          onNodesChange={onNodesChange}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          fitView
-          fitViewOptions={{ padding: 0.25 }}
-          minZoom={0.2}
-          onNodeClick={(_, node) => {
-            const nodeId = node.id;
-            setSelectedNodeId((prev) => prev === nodeId ? null : nodeId);
-            if (node.type !== 'externalNode') {
-              onSelectFile(node.data.filename as string);
-            }
-          }}
-          onPaneClick={() => setSelectedNodeId(null)}
-          colorMode="dark"
-          proOptions={{ hideAttribution: true }}
+      <EdgeClickCtx.Provider value={edgeClickCtxValue}>
+        <div
+          ref={containerRef}
+          className="relative w-full rounded-lg overflow-hidden border border-gray-800 bg-[#030712]"
+          style={{ height: isFullscreen ? '100vh' : Math.max(520, Math.min(800, nodes.length * 60 + 120)) }}
         >
-          {/* Arrow marker defs — must live inside ReactFlow's SVG context via a Panel overlay */}
-          <svg style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
-            <defs>
-              {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
-                <g key={dir}>
-                  <marker id={`cid-arrow-${dir}`} markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-                    <polygon points="0 0, 8 3, 0 6" fill={color} />
-                  </marker>
-                  {dir === 'bidirectional' && (
-                    <marker id={`cid-arrow-${dir}-start`} markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto-start-reverse">
+          <ReactFlow
+            nodes={nodes}
+            onNodesChange={onNodesChange}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            fitView
+            fitViewOptions={{ padding: 0.25 }}
+            minZoom={0.2}
+            onNodeClick={(_, node) => {
+              const nodeId = node.id;
+              setSelectedNodeId((prev) => prev === nodeId ? null : nodeId);
+              setDetailPanel(null);
+              if (node.type !== 'externalNode') {
+                onSelectFile(node.data.filename as string);
+              }
+            }}
+            onPaneClick={() => { setSelectedNodeId(null); setDetailPanel(null); }}
+            colorMode="dark"
+            proOptions={{ hideAttribution: true }}
+          >
+            {/* Arrow marker defs */}
+            <svg style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
+              <defs>
+                {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
+                  <g key={dir}>
+                    <marker id={`cid-arrow-${dir}`} markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
                       <polygon points="0 0, 8 3, 0 6" fill={color} />
                     </marker>
-                  )}
-                </g>
+                    {dir === 'bidirectional' && (
+                      <marker id={`cid-arrow-${dir}-start`} markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto-start-reverse">
+                        <polygon points="0 0, 8 3, 0 6" fill={color} />
+                      </marker>
+                    )}
+                  </g>
+                ))}
+                <marker id="cid-arrow-highlight" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                  <polygon points="0 0, 8 3, 0 6" fill="#e2e8f0" />
+                </marker>
+              </defs>
+            </svg>
+
+            <Background color="#1f2937" gap={20} />
+            <Controls className="[&>button]:bg-gray-800 [&>button]:border-gray-700 [&>button]:text-gray-400" />
+            <MiniMap
+              nodeColor="#374151"
+              maskColor="rgba(3,7,18,0.7)"
+              className="!bg-gray-900 !border !border-gray-700 rounded"
+            />
+
+            {/* Layout direction toggle + fullscreen + download */}
+            <div
+              style={{ position: 'absolute', top: 10, right: panelOpen ? 288 + 8 : 10, zIndex: 10 }}
+              className="flex gap-1 transition-all"
+            >
+              {(['LR', 'TB'] as RankDir[]).map((dir) => (
+                <button
+                  key={dir}
+                  onClick={() => setRankdir(dir)}
+                  className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${
+                    rankdir === dir
+                      ? 'bg-blue-900/60 border-blue-600 text-blue-300'
+                      : 'bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                  }`}
+                  title={dir === 'LR' ? 'Left → Right layout' : 'Top → Bottom layout'}
+                >
+                  {dir === 'LR' ? '⇢ LR' : '⇣ TB'}
+                </button>
               ))}
-              <marker id="cid-arrow-highlight" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-                <polygon points="0 0, 8 3, 0 6" fill="#e2e8f0" />
-              </marker>
-            </defs>
-          </svg>
-
-          <Background color="#1f2937" gap={20} />
-          <Controls className="[&>button]:bg-gray-800 [&>button]:border-gray-700 [&>button]:text-gray-400" />
-          <MiniMap
-            nodeColor="#374151"
-            maskColor="rgba(3,7,18,0.7)"
-            className="!bg-gray-900 !border !border-gray-700 rounded"
-          />
-
-          {/* Layout direction toggle + fullscreen + download */}
-          <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 10 }} className="flex gap-1">
-            {(['LR', 'TB'] as RankDir[]).map((dir) => (
               <button
-                key={dir}
-                onClick={() => setRankdir(dir)}
-                className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${
-                  rankdir === dir
-                    ? 'bg-blue-900/60 border-blue-600 text-blue-300'
-                    : 'bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
-                }`}
-                title={dir === 'LR' ? 'Left → Right layout' : 'Top → Bottom layout'}
-              >
-                {dir === 'LR' ? '⇢ LR' : '⇣ TB'}
-              </button>
-            ))}
-            <button
-              onClick={downloadPng}
-              className="px-2 py-1 text-[10px] font-mono rounded border bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
-              title="Download map as PNG"
-            >↓ PNG</button>
-            <button
-              onClick={toggleFullscreen}
-              className="px-2 py-1 text-[10px] font-mono rounded border bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
-              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-            >{isFullscreen ? '⊠' : '⛶'}</button>
-          </div>
+                onClick={downloadPng}
+                className="px-2 py-1 text-[10px] font-mono rounded border bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
+                title="Download map as PNG"
+              >↓ PNG</button>
+              <button
+                onClick={toggleFullscreen}
+                className="px-2 py-1 text-[10px] font-mono rounded border bg-gray-900/80 border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
+                title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              >{isFullscreen ? '⊠' : '⛶'}</button>
+            </div>
 
-          {/* Legend */}
-          <div
-            style={{ position: 'absolute', top: 10, left: 10, zIndex: 10 }}
-            className="bg-gray-900/90 border border-gray-700 rounded px-3 py-2 text-[10px] font-mono space-y-1 pointer-events-none"
-          >
-            {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
-              <div key={dir} className="flex items-center gap-2">
-                <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={color} strokeWidth="2" strokeDasharray={dir === 'uncertain' ? '4 2' : undefined} /></svg>
-                <span style={{ color }}>{dir}</span>
-              </div>
-            ))}
-            <div className="text-gray-600 mt-1">click node to highlight</div>
-          </div>
-        </ReactFlow>
-      </div>
+            {/* Legend */}
+            <div
+              style={{ position: 'absolute', top: 10, left: 10, zIndex: 10 }}
+              className="bg-gray-900/90 border border-gray-700 rounded px-3 py-2 text-[10px] font-mono space-y-1 pointer-events-none"
+            >
+              {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
+                <div key={dir} className="flex items-center gap-2">
+                  <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={color} strokeWidth="2" strokeDasharray={dir === 'uncertain' ? '4 2' : undefined} /></svg>
+                  <span style={{ color }}>{dir}</span>
+                </div>
+              ))}
+              <div className="text-gray-600 mt-1">click edge label for details</div>
+            </div>
+          </ReactFlow>
+
+          {/* Detail panel — overlaid on the right side of the graph */}
+          {panelOpen && (
+            <InterfaceDetailPanel
+              sourceLabel={detailPanel.sourceLabel}
+              targetLabel={detailPanel.targetLabel}
+              interfaces={detailPanel.interfaces}
+              onClose={() => setDetailPanel(null)}
+            />
+          )}
+        </div>
+      </EdgeClickCtx.Provider>
     </SelectionContext.Provider>
   );
 }

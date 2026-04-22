@@ -264,6 +264,7 @@ function InterfaceDetailPanel({
   interfaces: MessageInterface[];
   onClose: () => void;
 }) {
+  const [selectedMsgType, setSelectedMsgType] = useState<string | null>(null);
   return (
     <div className="absolute right-0 top-0 h-full w-72 bg-gray-900 border-l border-gray-700 flex flex-col z-20 overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-700 shrink-0">
@@ -276,8 +277,18 @@ function InterfaceDetailPanel({
         <button className="text-gray-600 hover:text-gray-400 text-sm" onClick={onClose}>✕</button>
       </div>
       <div className="overflow-y-auto flex-1 px-3 py-2 space-y-2">
-        {interfaces.map((msg) => (
-          <div key={msg.msgTypeConstant} className="border border-gray-700/60 rounded p-2 text-xs">
+        {interfaces.map((msg) => {
+          const isSelected = selectedMsgType === msg.msgTypeConstant;
+          return (
+          <div
+            key={msg.msgTypeConstant}
+            onClick={() => setSelectedMsgType(isSelected ? null : msg.msgTypeConstant)}
+            className={`border rounded p-2 text-xs cursor-pointer transition-colors ${
+              isSelected
+                ? 'border-blue-500/70 bg-blue-950/40'
+                : 'border-gray-700/60 hover:border-gray-600/60'
+            }`}
+          >
             <div className="font-mono text-gray-100 font-semibold truncate">{msg.msgTypeConstant}</div>
             <div className="flex flex-wrap gap-1.5 mt-1 items-center">
               <span className="text-gray-600 font-mono">{msg.msgTypeValue}</span>
@@ -323,7 +334,8 @@ function InterfaceDetailPanel({
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

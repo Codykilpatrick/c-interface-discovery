@@ -123,6 +123,9 @@ function inferDirection(
     if (!referencingFiles.has(a.filename)) continue;
 
     for (const ipcCall of a.ipc) {
+      // Skip external calls — they describe outbound connections to named external
+      // systems and must not bleed into direction inference for internal interfaces.
+      if (ipcCall.isExternal) continue;
       const callName = ipcCall.detail.split('(')[0].trim().toLowerCase();
       const isSend = SEND_CALLS.has(callName) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue'
         || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional';
@@ -154,6 +157,9 @@ function computeFileRoles(refs: FileRef[], analyses: FileAnalysis[]): MsgFileRol
     let hasSend = false;
     let hasRecv = false;
     for (const ipcCall of a.ipc) {
+      // Skip external calls — they describe outbound connections to named external
+      // systems and must not bleed into direction inference for internal interfaces.
+      if (ipcCall.isExternal) continue;
       const name = ipcCall.detail.split('(')[0].trim().toLowerCase();
       // Check by call name, IPC type, or explicit direction from custom patterns
       if (SEND_CALLS.has(name) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue'
@@ -308,7 +314,9 @@ export function extractMessageInterfaces(
 
     // Augment existing entry's direction if it was 'unknown' and we now have confident direction
     if (allExistingNames.has(constant)) {
-      const existing = defineBasedInterfaces.find((m) => m.msgTypeConstant === constant);
+      const existing =
+        defineBasedInterfaces.find((m) => m.msgTypeConstant === constant) ??
+        uniqueStructInterfaces.find((m) => m.msgTypeConstant === constant);
       if (existing && !existing.directionConfident) {
         const hasSend = sources.some((s) => s.direction === 'send' || s.direction === 'bidirectional' || s.direction === 'control');
         const hasRecv = sources.some((s) => s.direction === 'recv' || s.direction === 'bidirectional');

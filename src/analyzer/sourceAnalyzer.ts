@@ -303,7 +303,10 @@ export async function analyzeSource(
       `);
       const ALL_CAPS_RE = /^[A-Z][A-Z0-9_]+$/;
 
-      const defineNames = new Set(typeDict.defines.map((d) => d.name));
+      const defineNames = new Set([
+        ...typeDict.defines.map((d) => d.name),
+        ...typeDict.enums.flatMap((e) => e.values),
+      ]);
       const structNames = new Set(typeDict.structs.map((s) => s.name));
 
       for (const match of callWithArgsQuery.matches(root)) {
@@ -329,11 +332,11 @@ export async function analyzeSource(
           if (!existingCall) continue;
 
           // Strategy A: argument constant extraction
+          // Resolves direct identifiers AND identifiers inside cast expressions,
+          // e.g. both AUDIO_MSG and (MSG_ID)AUDIO_MSG map to "AUDIO_MSG".
           if (argsCapture) {
-            for (const argChild of argsCapture.node.children) {
-              if (argChild.type !== 'identifier') continue;
-              const argText = nodeText(argChild);
-              if (!ALL_CAPS_RE.test(argText)) continue;
+            const recordConstant = (argText: string) => {
+              if (!ALL_CAPS_RE.test(argText)) return;
               if (defineNames.has(argText)) {
                 existingCall.msgConstants = existingCall.msgConstants ?? [];
                 if (!existingCall.msgConstants.includes(argText)) {
@@ -344,6 +347,15 @@ export async function analyzeSource(
                 if (!existingCall.missingConstants.includes(argText)) {
                   existingCall.missingConstants.push(argText);
                 }
+              }
+            };
+            for (const argChild of argsCapture.node.children) {
+              if (argChild.type === 'identifier') {
+                recordConstant(nodeText(argChild));
+              } else if (argChild.type === 'cast_expression') {
+                // (TYPE)IDENTIFIER — extract the value node
+                const valueNode = argChild.childForFieldName('value') ?? argChild.lastChild;
+                if (valueNode?.type === 'identifier') recordConstant(nodeText(valueNode));
               }
             }
           }
@@ -365,10 +377,18 @@ export async function analyzeSource(
                   .replace(/\bconst\b|\bvolatile\b|\bstruct\b|\bunion\b/g, '')
                   .replace(/\*/g, '')
                   .trim();
-                if (rawType && structNames.has(rawType)) {
-                  existingCall.impliedStructs = existingCall.impliedStructs ?? [];
-                  if (!existingCall.impliedStructs.includes(rawType)) {
-                    existingCall.impliedStructs.push(rawType);
+                if (rawType) {
+                  if (structNames.has(rawType)) {
+                    existingCall.impliedStructs = existingCall.impliedStructs ?? [];
+                    if (!existingCall.impliedStructs.includes(rawType)) {
+                      existingCall.impliedStructs.push(rawType);
+                    }
+                  } else if (rawType.length > 1 && /^[A-Za-z_]\w*$/.test(rawType)) {
+                    // Looks like a type name but isn't in typeDict — likely from an unresolved external header
+                    existingCall.candidateTypes = existingCall.candidateTypes ?? [];
+                    if (!existingCall.candidateTypes.includes(rawType)) {
+                      existingCall.candidateTypes.push(rawType);
+                    }
                   }
                 }
               }

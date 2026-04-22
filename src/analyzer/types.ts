@@ -83,6 +83,8 @@ export interface IpcCall {
   missingConstants?: string[];
   /** Struct type names found in the containing wrapper function's parameter list. */
   impliedStructs?: string[];
+  /** Param type names from IPC wrapper params that were NOT found in typeDict (unresolved external structs). */
+  candidateTypes?: string[];
 }
 
 export interface CodeLine {
