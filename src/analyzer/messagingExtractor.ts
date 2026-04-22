@@ -161,7 +161,7 @@ function computeFileRoles(refs: FileRef[], analyses: FileAnalysis[]): MsgFileRol
       if (ipcCall.isExternal) continue;
       const name = ipcCall.detail.split('(')[0].trim().toLowerCase();
       // Check by call name, IPC type, or explicit direction from custom patterns
-      if (SEND_CALLS.has(name) || ipcCall.type === 'socket-send' || ipcCall.type === 'mqueue'
+      if (SEND_CALLS.has(name) || ipcCall.type === 'socket-send'
           || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional') {
         hasSend = true;
       }

@@ -921,8 +921,6 @@ function CrossAppSummary({ applications }: { applications: ApplicationGroup[] })
   );
 }
 
-// ── Drill-down view ───────────────────────────────────────────────────────────
-
 // ── Config export/import buttons ──────────────────────────────────────────────
 
 function ConfigButtons({ onExport, onImport }: { onExport: () => void; onImport: (json: string) => void }) {

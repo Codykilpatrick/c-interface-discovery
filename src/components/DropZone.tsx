@@ -42,9 +42,8 @@ export default function DropZone({ zone: _zone, onFiles, label, accept, descript
 
   return (
     <div
-      className={`flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-8 cursor-pointer transition-colors
+      className={`flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-8 transition-colors
         ${dragging ? 'border-blue-500 bg-blue-950/20' : 'border-gray-700 hover:border-gray-500 bg-gray-900/30'}`}
-      onClick={() => inputRef.current?.click()}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
@@ -73,15 +72,27 @@ export default function DropZone({ zone: _zone, onFiles, label, accept, descript
       <div className="text-sm font-semibold text-gray-300 mb-1">{label}</div>
       <div className="text-xs text-gray-500 text-center">{description}</div>
       <div className="mt-3 flex items-center gap-3">
-        <span className="text-xs text-gray-600">Click to select or drag files here</span>
+        <button
+          type="button"
+          className="text-xs text-gray-600 hover:text-gray-400 underline underline-offset-2 transition-colors cursor-pointer"
+          onClick={() => inputRef.current?.click()}
+        >
+          Select files
+        </button>
         {allowDirectory && (
-          <button
-            type="button"
-            className="text-xs text-gray-600 hover:text-gray-400 underline underline-offset-2 transition-colors"
-            onClick={(e) => { e.stopPropagation(); dirInputRef.current?.click(); }}
-          >
-            or ingest directory
-          </button>
+          <>
+            <span className="text-gray-700 text-xs">or</span>
+            <button
+              type="button"
+              className="text-xs text-gray-600 hover:text-gray-400 underline underline-offset-2 transition-colors cursor-pointer"
+              onClick={() => dirInputRef.current?.click()}
+            >
+              ingest directory
+            </button>
+          </>
+        )}
+        {!allowDirectory && (
+          <span className="text-xs text-gray-600">or drag files here</span>
         )}
       </div>
     </div>

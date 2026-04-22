@@ -270,13 +270,16 @@ function InterfaceDetailPanel({
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-700 shrink-0">
         <div>
           <div className="text-xs font-semibold text-gray-200">Interface Detail</div>
-          <div className="text-[10px] text-gray-500 font-mono mt-0.5">
+          <div className="text-[10px] text-gray-500 font-mono mt-0.5 truncate max-w-56">
             {sourceLabel} → {targetLabel}
           </div>
         </div>
-        <button className="text-gray-600 hover:text-gray-400 text-sm" onClick={onClose}>✕</button>
+        <button className="text-gray-600 hover:text-gray-400 text-sm shrink-0 ml-2" onClick={onClose}>✕</button>
       </div>
       <div className="overflow-y-auto flex-1 px-3 py-2 space-y-2">
+        {interfaces.length === 0 && (
+          <div className="text-xs text-gray-600 italic">No interface details available.</div>
+        )}
         {interfaces.map((msg) => {
           const isSelected = selectedMsgType === msg.msgTypeConstant;
           return (
@@ -291,7 +294,9 @@ function InterfaceDetailPanel({
           >
             <div className="font-mono text-gray-100 font-semibold truncate">{msg.msgTypeConstant}</div>
             <div className="flex flex-wrap gap-1.5 mt-1 items-center">
-              <span className="text-gray-600 font-mono">{msg.msgTypeValue}</span>
+              {msg.msgTypeValue && msg.msgTypeValue !== '(struct)' && msg.msgTypeValue !== '(implied from wrapper)' && (
+                <span className="text-gray-600 font-mono">{msg.msgTypeValue}</span>
+              )}
               <span className={`px-1.5 py-0.5 rounded text-[10px] ${
                 msg.direction === 'producer' ? 'bg-blue-900/50 text-blue-300' :
                 msg.direction === 'consumer' ? 'bg-green-900/50 text-green-300' :
@@ -302,7 +307,7 @@ function InterfaceDetailPanel({
                 <span className="text-yellow-600 text-[10px]">uncertain</span>
               )}
               {msg.transport && (
-                <span className="text-gray-600">via {msg.transport}</span>
+                <span className="text-gray-600 text-[10px]">via {msg.transport}</span>
               )}
             </div>
             {msg.struct && (
@@ -316,19 +321,23 @@ function InterfaceDetailPanel({
             {!msg.struct && (
               <div className="mt-1 text-gray-700 italic">struct unresolved</div>
             )}
-            <div className="mt-1 text-gray-700 font-mono text-[10px] truncate">
-              defined in: {msg.definedIn}
-            </div>
+            {msg.definedIn && (
+              <div className="mt-1 text-gray-700 font-mono text-[10px] truncate" title={msg.definedIn}>
+                defined in: {msg.definedIn.split('/').pop()}
+              </div>
+            )}
             {msg.fileRoles.length > 0 && (
               <div className="mt-1.5 space-y-0.5">
                 {msg.fileRoles.map((r) => (
                   <div key={r.filename} className="flex items-center gap-1.5 text-[10px]">
-                    <span className={`px-1 py-0.5 rounded ${
+                    <span className={`px-1 py-0.5 rounded shrink-0 ${
                       r.role === 'producer' ? 'bg-blue-900/40 text-blue-400' :
                       r.role === 'consumer' ? 'bg-green-900/40 text-green-400' :
                       'bg-purple-900/40 text-purple-400'
                     }`}>{r.role}</span>
-                    <span className="font-mono text-gray-600 truncate">{r.filename}</span>
+                    <span className="font-mono text-gray-600 truncate" title={r.filename}>
+                      {r.filename.split('/').pop()}
+                    </span>
                   </div>
                 ))}
               </div>
