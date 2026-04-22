@@ -355,9 +355,10 @@ function InterfaceDetailPanel({
 interface ApplicationGraphProps {
   groups: Array<{ id: string; name: string; analysis: import('../analyzer/types').StringAnalysis | null }>;
   onDrillDown: (appId: string) => void;
+  autoFullscreen?: boolean;
 }
 
-function ApplicationGraphInner({ groups, onDrillDown }: ApplicationGraphProps) {
+function ApplicationGraphInner({ groups, onDrillDown, autoFullscreen }: ApplicationGraphProps) {
   const [rankdir, setRankdir] = useState<RankDir>('LR');
   const { nodes: initialNodes, edges } = useMemo(() => buildAppGraph(groups, rankdir), [groups, rankdir]);
   const [nodes, setNodes, onNodesChange] = useNodesState<AppNode | AppExternalNode>(initialNodes);
@@ -378,6 +379,15 @@ function ApplicationGraphInner({ groups, onDrillDown }: ApplicationGraphProps) {
     const handler = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', handler);
     return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  // Auto-enter fullscreen when navigated back from a fullscreen drill-down view
+  useEffect(() => {
+    if (autoFullscreen && containerRef.current) {
+      containerRef.current.requestFullscreen().catch(() => {});
+    }
+  // Only run on mount — autoFullscreen is a one-shot signal
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleFullscreen = useCallback(() => {

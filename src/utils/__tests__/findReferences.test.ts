@@ -3,7 +3,15 @@ import { findReferences } from '../findReferences';
 import type { LoadedFile } from '../../analyzer/types';
 
 function makeFile(filename: string, content: string): LoadedFile {
-  return { filename, content };
+  return {
+    filename,
+    content,
+    zone: 'string',
+    encoding: 'utf-8',
+    sizeBytes: content.length,
+    oversized: false,
+    rejected: false,
+  };
 }
 
 describe('findReferences — whole-word matching', () => {

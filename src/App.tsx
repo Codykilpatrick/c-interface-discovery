@@ -59,6 +59,7 @@ export default function App() {
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [view, setView] = useState<'interfaces' | 'per-file'>('interfaces');
+  const [autoFullscreenAppGraph, setAutoFullscreenAppGraph] = useState(false);
 
   const [patterns, setPatterns] = useState<CustomPattern[]>(() => patternRegistry.getAll());
   const [msgStructPatterns, setMsgStructPatterns] = useState<MsgStructPattern[]>(() => msgStructRegistry.getAll());
@@ -646,6 +647,13 @@ export default function App() {
             onDetectMsgStructs={handleDetectMsgStructs}
             msgStructPrefill={msgStructPrefill}
             msgStructMatchCounts={msgStructMatchCounts}
+            onBack={(wasFullscreen) => {
+              setAutoFullscreenAppGraph(wasFullscreen);
+              setSelectedAppId(null);
+              setActiveFile(null);
+              setView('interfaces');
+              window.scrollTo({ top: 0, behavior: 'instant' });
+            }}
           />
         )}
 
@@ -727,7 +735,9 @@ export default function App() {
                 </div>
                 <ApplicationGraph
                   groups={applications}
+                  autoFullscreen={autoFullscreenAppGraph}
                   onDrillDown={(appId) => {
+                    setAutoFullscreenAppGraph(false);
                     setSelectedAppId(appId);
                     setActiveFile(null);
                     setView('interfaces');
@@ -990,6 +1000,7 @@ interface DrillDownViewProps {
   onDetectMsgStructs: () => number;
   msgStructPrefill: string | undefined;
   msgStructMatchCounts: Map<string, number>;
+  onBack: (wasFullscreen: boolean) => void;
 }
 
 function DrillDownView({
@@ -1024,6 +1035,7 @@ function DrillDownView({
   onDetectMsgStructs,
   msgStructPrefill,
   msgStructMatchCounts,
+  onBack,
 }: DrillDownViewProps) {
   const allWarnings = analysis?.warnings ?? [];
 
@@ -1049,6 +1061,8 @@ function DrillDownView({
             <InterfaceGraph
               analysis={analysis}
               onSelectFile={(filename) => setActiveFile(filename)}
+              onBack={onBack}
+              appName={app.name}
             />
           </div>
 

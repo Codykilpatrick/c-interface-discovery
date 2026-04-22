@@ -1,5 +1,6 @@
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   MiniMap,
@@ -8,6 +9,7 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getSmoothStepPath,
+  useReactFlow,
   type NodeProps,
   type EdgeProps,
   type NodeTypes,
@@ -36,11 +38,13 @@ interface GraphSelection {
   selectedNodeId: string | null;
   connectedEdgeIds: Set<string>;
   connectedNodeIds: Set<string>;
+  searchMatchIds: Set<string> | null;
 }
 const SelectionContext = createContext<GraphSelection>({
   selectedNodeId: null,
   connectedEdgeIds: new Set(),
   connectedNodeIds: new Set(),
+  searchMatchIds: null,
 });
 
 // ── Edge click context ────────────────────────────────────────────────────────
@@ -90,15 +94,18 @@ const DIRECTION_COLOR: Record<EdgeDirection, string> = {
 
 function ProcessNodeComponent({ data, selected, id }: NodeProps<ProcessNode>) {
   const { label, ipcTypes, hasUnknown } = data as ProcessNodeData;
-  const { selectedNodeId, connectedNodeIds } = useContext(SelectionContext);
+  const { selectedNodeId, connectedNodeIds, searchMatchIds } = useContext(SelectionContext);
   const isSelected = id === selectedNodeId;
-  const isDimmed = selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
+  const isSearchMatch = searchMatchIds !== null && searchMatchIds.has(id);
+  const isDimmed = searchMatchIds !== null
+    ? !isSearchMatch
+    : selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
   return (
     <div
       className="bg-gray-900 rounded-lg px-3 py-2 w-48 shadow-lg transition-all cursor-pointer group"
       style={{
-        border: `2px solid ${isSelected ? '#60a5fa' : selected ? '#60a5fa' : '#374151'}`,
-        opacity: isDimmed ? 0.25 : 1,
+        border: `2px solid ${isSelected || selected || isSearchMatch ? '#60a5fa' : '#374151'}`,
+        opacity: isDimmed ? 0.15 : 1,
       }}
       onMouseEnter={(e) => { if (!isSelected && !selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#6b7280'; }}
       onMouseLeave={(e) => { if (!isSelected && !selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#374151'; }}
@@ -134,9 +141,12 @@ function ProcessNodeComponent({ data, selected, id }: NodeProps<ProcessNode>) {
 // ── External phantom node ─────────────────────────────────────────────────────
 
 function ExternalNodeComponent({ selected, id, data }: NodeProps<ExternalNode>) {
-  const { selectedNodeId, connectedNodeIds } = useContext(SelectionContext);
+  const { selectedNodeId, connectedNodeIds, searchMatchIds } = useContext(SelectionContext);
   const isSelected = id === selectedNodeId;
-  const isDimmed = selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
+  const isSearchMatch = searchMatchIds !== null && searchMatchIds.has(id);
+  const isDimmed = searchMatchIds !== null
+    ? !isSearchMatch
+    : selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
   const isNamed = data.label !== '? External';
   return (
     <div
@@ -350,14 +360,18 @@ function InterfaceDetailPanel({
 interface InterfaceGraphProps {
   analysis: StringAnalysis;
   onSelectFile: (filename: string) => void;
+  onBack?: (wasFullscreen: boolean) => void;
+  appName?: string;
 }
 
-export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGraphProps) {
+function InterfaceGraphInner({ analysis, onSelectFile, onBack, appName }: InterfaceGraphProps) {
+  const { fitView } = useReactFlow();
   const [rankdir, setRankdir] = useState<RankDir>('LR');
   const { nodes: initialNodes, edges } = useMemo(() => buildGraph(analysis, rankdir), [analysis, rankdir]);
   const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNode | ExternalNode>(initialNodes);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [detailPanel, setDetailPanel] = useState<{
     sourceLabel: string;
     targetLabel: string;
@@ -392,6 +406,7 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
     setNodes(initialNodes);
     setSelectedNodeId(null);
     setDetailPanel(null);
+    setSearchQuery('');
   }, [initialNodes, setNodes]);
 
   // Compute which edges/nodes are connected to the selected node
@@ -411,9 +426,48 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
     return { connectedEdgeIds: edgeIds, connectedNodeIds: nodeIds };
   }, [selectedNodeId, edges]);
 
+  // Search: match nodes by label (filename) or by any connected edge's msgType / struct name
+  const searchMatchIds = useMemo<Set<string> | null>(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return null;
+    const matched = new Set<string>();
+    for (const node of nodes) {
+      const label = ((node.data.label as string) ?? '').toLowerCase();
+      if (label.includes(q)) {
+        matched.add(node.id);
+        continue;
+      }
+      for (const edge of edges) {
+        if (edge.source === node.id || edge.target === node.id) {
+          if ((edge.data?.msgTypes as string[] | undefined)?.some((m) => m.toLowerCase().includes(q))) {
+            matched.add(node.id);
+            break;
+          }
+        }
+      }
+    }
+    return matched;
+  }, [searchQuery, nodes, edges]);
+
+  // Pan to matched nodes when search result changes
+  const prevSearchMatchCount = useRef(0);
+  useEffect(() => {
+    if (!searchMatchIds || searchMatchIds.size === 0) { prevSearchMatchCount.current = 0; return; }
+    if (searchMatchIds.size !== prevSearchMatchCount.current) {
+      prevSearchMatchCount.current = searchMatchIds.size;
+      const matchedNodes = nodes.filter((n) => searchMatchIds.has(n.id));
+      fitView({ nodes: matchedNodes, padding: 0.4, duration: 300 });
+    }
+  }, [searchMatchIds, nodes, fitView]);
+
+  const handleSearchClear = useCallback(() => {
+    setSearchQuery('');
+    fitView({ padding: 0.25, duration: 300 });
+  }, [fitView]);
+
   const selectionCtx = useMemo<GraphSelection>(
-    () => ({ selectedNodeId, connectedEdgeIds, connectedNodeIds }),
-    [selectedNodeId, connectedEdgeIds, connectedNodeIds]
+    () => ({ selectedNodeId, connectedEdgeIds, connectedNodeIds, searchMatchIds }),
+    [selectedNodeId, connectedEdgeIds, connectedNodeIds, searchMatchIds]
   );
 
   // Build fast lookup: msgTypeConstant → MessageInterface
@@ -546,18 +600,47 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
               >{isFullscreen ? '⊠' : '⛶'}</button>
             </div>
 
-            {/* Legend */}
-            <div
-              style={{ position: 'absolute', top: 10, left: 10, zIndex: 10 }}
-              className="bg-gray-900/90 border border-gray-700 rounded px-3 py-2 text-[10px] font-mono space-y-1 pointer-events-none"
+            {/* Search box — centred top */}
+            <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 10 }}
+              className="flex items-center gap-1 bg-gray-900/90 border border-gray-700 rounded px-2 py-1"
             >
-              {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
-                <div key={dir} className="flex items-center gap-2">
-                  <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={color} strokeWidth="2" strokeDasharray={dir === 'uncertain' ? '4 2' : undefined} /></svg>
-                  <span style={{ color }}>{dir}</span>
-                </div>
-              ))}
-              <div className="text-gray-600 mt-1">click edge label for details</div>
+              <span className="text-gray-600 text-xs select-none">⌕</span>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Find file or struct…"
+                className="bg-transparent text-xs font-mono text-gray-300 placeholder-gray-600 focus:outline-none w-36"
+              />
+              {searchQuery && (
+                <>
+                  <span className="text-gray-600 text-[10px] shrink-0">
+                    {searchMatchIds?.size ?? 0} match{(searchMatchIds?.size ?? 0) !== 1 ? 'es' : ''}
+                  </span>
+                  <button onClick={handleSearchClear} className="text-gray-600 hover:text-gray-400 text-xs ml-1">✕</button>
+                </>
+              )}
+            </div>
+
+            {/* Left-side: back button (fullscreen only) + legend */}
+            <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 10 }} className="flex flex-col gap-1.5">
+              {isFullscreen && onBack && (
+                <button
+                  onClick={() => onBack(isFullscreen)}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-mono rounded border bg-gray-900/90 border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 transition-colors"
+                >
+                  ← {appName ?? 'All Applications'}
+                </button>
+              )}
+              <div className="bg-gray-900/90 border border-gray-700 rounded px-3 py-2 text-[10px] font-mono space-y-1 pointer-events-none">
+                {(Object.entries(DIRECTION_COLOR) as [EdgeDirection, string][]).map(([dir, color]) => (
+                  <div key={dir} className="flex items-center gap-2">
+                    <svg width="24" height="4"><line x1="0" y1="2" x2="24" y2="2" stroke={color} strokeWidth="2" strokeDasharray={dir === 'uncertain' ? '4 2' : undefined} /></svg>
+                    <span style={{ color }}>{dir}</span>
+                  </div>
+                ))}
+                <div className="text-gray-600 mt-1">click edge label for details</div>
+              </div>
             </div>
           </ReactFlow>
 
@@ -573,5 +656,13 @@ export default function InterfaceGraph({ analysis, onSelectFile }: InterfaceGrap
         </div>
       </EdgeClickCtx.Provider>
     </SelectionContext.Provider>
+  );
+}
+
+export default function InterfaceGraph(props: InterfaceGraphProps) {
+  return (
+    <ReactFlowProvider>
+      <InterfaceGraphInner {...props} />
+    </ReactFlowProvider>
   );
 }
