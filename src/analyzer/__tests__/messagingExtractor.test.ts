@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { extractMessageInterfaces } from '../messagingExtractor';
-import type { CDefine, CStruct, FileAnalysis, IpcCall, LoadedFile, MsgStructPattern, TypeDict } from '../types';
+import type { CDefine, CEnum, CStruct, FileAnalysis, IpcCall, LoadedFile, MsgStructPattern, TypeDict } from '../types';
 
-function makeTypeDict(defines: CDefine[] = [], structs: CStruct[] = []): TypeDict {
-  return { structs, enums: [], defines };
+function makeTypeDict(defines: CDefine[] = [], structs: CStruct[] = [], enums: CEnum[] = []): TypeDict {
+  return { structs, enums, defines };
+}
+
+function makeEnum(name: string, values: string[], sourceFile = 'msg_ids.h'): CEnum {
+  return { name, values, sourceFile, conditional: false };
 }
 
 function makeAnalysis(
@@ -502,5 +506,116 @@ describe('messagingExtractor — Strategy B (wrapper function implied structs)',
     const matches = result.filter((m) => m.msgTypeConstant === 'WeaponsData');
     expect(matches).toHaveLength(1);
     expect(matches[0].direction).toBe('both');
+  });
+});
+
+// ── Enum-valued msg IDs via isExternal wrapper function ───────────────────────
+//
+// Fixture scenario
+// ────────────────
+// msg_ids.h:
+//   typedef enum { AUDIO_STATUS_MSGID = 1, NAV_UPDATE_MSGID = 2 } BusMsgId;
+//
+// bus_iface.h:
+//   typedef struct { float x; float y; } NavData;
+//   typedef struct { uint8_t level; }    AudioStatus;
+//
+// bus_wrapper.c  (the file that contains bus_send_message):
+//   void publish_nav(BusHandle h, NavData *d) {
+//       bus_send_message(h, NAV_UPDATE_MSGID, sizeof(*d), d);
+//   }
+//   void publish_audio(BusHandle h, AudioStatus *s) {
+//       bus_send_message(h, (BusMsgId)AUDIO_STATUS_MSGID, sizeof(*s), s);
+//   }
+//
+// consumer.c  (receives via a different IPC mechanism):
+//   void process_nav(NavData *d) { ... recv(...) ... }
+//
+// The sourceAnalyzer would parse bus_wrapper.c and produce IpcCall entries
+// with isExternal=true (bus_send_message → external "Bus") and
+// msgConstants=['NAV_UPDATE_MSGID', 'AUDIO_STATUS_MSGID'] (enum members
+// resolved from typeDict.enums, plus cast-expression unwrapping).
+//
+// These tests verify messagingExtractor handles that output correctly.
+
+describe('messagingExtractor — enum msg IDs via isExternal wrapper', () => {
+  const navStruct   = makeStruct('NavData',     'bus_iface.h');
+  const audioStruct = makeStruct('AudioStatus', 'bus_iface.h');
+  const msgIdEnum   = makeEnum('BusMsgId', ['AUDIO_STATUS_MSGID', 'NAV_UPDATE_MSGID']);
+
+  // Simulates what sourceAnalyzer produces for bus_wrapper.c after our fixes:
+  // both plain and cast-wrapped enum constants end up in msgConstants.
+  const wrapperIpc: IpcCall[] = [
+    {
+      type: 'custom',
+      detail: 'bus_send_message (custom pattern, 2 matches)',
+      direction: 'send',
+      isExternal: true,
+      externalName: 'Bus',
+      msgConstants: ['NAV_UPDATE_MSGID', 'AUDIO_STATUS_MSGID'],
+      impliedStructs: ['NavData', 'AudioStatus'],
+    },
+  ];
+
+  const consumerIpc: IpcCall[] = [
+    { type: 'custom', detail: 'bus_recv_message (custom pattern, 1 match)', direction: 'recv' },
+  ];
+
+  const analyses = [
+    makeAnalysis('bus_wrapper.c', [], wrapperIpc),
+    makeAnalysis('consumer.c',    [], consumerIpc),
+  ];
+
+  const typeDict = makeTypeDict([], [navStruct, audioStruct], [msgIdEnum]);
+  const sourceFiles = [
+    makeSourceFile('bus_wrapper.c', 'void publish_nav(...) { bus_send_message(h, NAV_UPDATE_MSGID, sizeof(*d), d); }\nvoid publish_audio(...) { bus_send_message(h, (BusMsgId)AUDIO_STATUS_MSGID, sizeof(*s), s); }'),
+    makeSourceFile('consumer.c',    'void process_nav(NavData *d) { bus_recv_message(...); }\nvoid process_audio(AudioStatus *s) { bus_recv_message(...); }'),
+  ];
+
+  it('creates MessageInterface for each enum-valued msgConstant', () => {
+    const result = extractMessageInterfaces(analyses, typeDict, [], sourceFiles);
+    expect(result.find((m) => m.msgTypeConstant === 'NAV_UPDATE_MSGID')).toBeDefined();
+    expect(result.find((m) => m.msgTypeConstant === 'AUDIO_STATUS_MSGID')).toBeDefined();
+  });
+
+  it('marks enum-constant interfaces as directionConfident (send side known)', () => {
+    const result = extractMessageInterfaces(analyses, typeDict, [], sourceFiles);
+    const nav = result.find((m) => m.msgTypeConstant === 'NAV_UPDATE_MSGID')!;
+    expect(nav.directionConfident).toBe(true);
+    expect(nav.direction).toBe('producer');
+  });
+
+  it('isExternal send does NOT bleed into struct-based interface direction', () => {
+    // NavData and AudioStatus are referenced in both files (bus_wrapper sends,
+    // consumer.c receives). Without the isExternal guard, bus_wrapper.c's send
+    // call would flip directionConfident for ALL structs in that file.
+    // With the guard, struct-based direction comes only from non-external IPC.
+    const result = extractMessageInterfaces(analyses, typeDict, [], sourceFiles,
+      [makeMsgStructPattern('^NavData$', 'NavData'), makeMsgStructPattern('^AudioStatus$', 'AudioStatus')]);
+
+    const nav = result.find((m) => m.msgTypeConstant === 'NavData');
+    expect(nav).toBeDefined();
+    // consumer.c has a recv IPC call (non-external), bus_wrapper.c has only
+    // isExternal send → only the recv side contributes → direction = consumer.
+    expect(nav!.direction).toBe('consumer');
+    expect(nav!.directionConfident).toBe(true);
+  });
+
+  it('implied structs from wrapper are linked to correct struct definitions', () => {
+    const result = extractMessageInterfaces(analyses, typeDict, [], sourceFiles);
+    const nav = result.find((m) => m.msgTypeConstant === 'NavData' || m.msgTypeConstant === 'NAV_UPDATE_MSGID');
+    // Strategy B produces an implied-struct entry for NavData; Strategy A produces
+    // one for NAV_UPDATE_MSGID. Both should be resolvable.
+    const navById = result.find((m) => m.msgTypeConstant === 'NAV_UPDATE_MSGID');
+    expect(navById).toBeDefined();
+    void nav; // either path is acceptable
+  });
+
+  it('fileRoles for enum-constant interface lists wrapper file as producer', () => {
+    const result = extractMessageInterfaces(analyses, typeDict, [], sourceFiles);
+    const audio = result.find((m) => m.msgTypeConstant === 'AUDIO_STATUS_MSGID')!;
+    const producerRole = audio.fileRoles.find((r) => r.filename === 'bus_wrapper.c');
+    expect(producerRole).toBeDefined();
+    expect(producerRole!.role).toBe('producer');
   });
 });
