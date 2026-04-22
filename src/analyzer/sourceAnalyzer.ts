@@ -349,13 +349,47 @@ export async function analyzeSource(
                 }
               }
             };
+            // Recursively find the first meaningful type/identifier name inside a sizeof node.
+            // Tree-sitter may produce different shapes depending on whether the argument is
+            // treated as a type or an expression:
+            //   sizeof(T)  → sizeof_expression → type_descriptor → type_identifier
+            //   sizeof(T)  → sizeof_expression → parenthesized_expression → identifier
+            //   sizeof T   → sizeof_expression → identifier / type_identifier
+            const findSizeofName = (n: import('web-tree-sitter').SyntaxNode): string | null => {
+              for (const child of n.children) {
+                if (child.type === 'type_identifier' || child.type === 'identifier') return nodeText(child);
+                if (child.type === 'type_descriptor' || child.type === 'parenthesized_expression') {
+                  const found = findSizeofName(child);
+                  if (found) return found;
+                }
+              }
+              return null;
+            };
+            const recordSizeof = (sizeofNode: import('web-tree-sitter').SyntaxNode) => {
+              const name = findSizeofName(sizeofNode);
+              if (!name || name.length < 2 || !/^[A-Za-z_]\w*$/.test(name)) return;
+              if (structNames.has(name)) {
+                existingCall.impliedStructs = existingCall.impliedStructs ?? [];
+                if (!existingCall.impliedStructs.includes(name)) existingCall.impliedStructs.push(name);
+              } else {
+                existingCall.candidateTypes = existingCall.candidateTypes ?? [];
+                if (!existingCall.candidateTypes.includes(name)) existingCall.candidateTypes.push(name);
+              }
+            };
+
             for (const argChild of argsCapture.node.children) {
               if (argChild.type === 'identifier') {
                 recordConstant(nodeText(argChild));
               } else if (argChild.type === 'cast_expression') {
-                // (TYPE)IDENTIFIER — extract the value node
+                // (TYPE)IDENTIFIER or (TYPE)sizeof(STRUCT) — extract the value node
                 const valueNode = argChild.childForFieldName('value') ?? argChild.lastChild;
-                if (valueNode?.type === 'identifier') recordConstant(nodeText(valueNode));
+                if (valueNode?.type === 'identifier') {
+                  recordConstant(nodeText(valueNode));
+                } else if (valueNode?.type === 'sizeof_expression') {
+                  recordSizeof(valueNode);
+                }
+              } else if (argChild.type === 'sizeof_expression') {
+                recordSizeof(argChild);
               }
             }
           }

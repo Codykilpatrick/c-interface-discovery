@@ -280,6 +280,18 @@ export function buildAppGraph(
         const edgeSource = isSend ? g.id : extId;
         const edgeTarget = isSend ? extId : g.id;
         addOrMerge(edgeSource, edgeTarget, syntheticIface.msgTypeConstant, syntheticIface, true);
+
+        // Also link any MessageInterfaces from this analysis that were resolved from this call's
+        // argument constants or implied struct names, so the edge detail panel shows them.
+        const linkedConstants = [
+          ...(call.msgConstants ?? []),
+          ...(call.missingConstants ?? []),
+          ...(call.impliedStructs ?? []),
+        ];
+        for (const name of linkedConstants) {
+          const iface = g.analysis!.messageInterfaces.find((m) => m.msgTypeConstant === name);
+          if (iface) addOrMerge(edgeSource, edgeTarget, name, iface, true);
+        }
       }
     }
   }

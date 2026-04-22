@@ -223,11 +223,15 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
       // For isExternal calls, use direction directly — same logic as buildAppGraph
       const extIsSend = ipcCall.direction !== 'recv';
       const extIsRecv = ipcCall.direction === 'recv' || ipcCall.direction === 'bidirectional';
+      const callMsgNames = [
+        ...(ipcCall.msgConstants ?? []),
+        ...(ipcCall.impliedStructs ?? []),
+      ];
       if (extIsSend) {
         addExternalEdge(fa.filename, nodeId, ipcCall.type, true);
         const edge = edgeMap.get(`${fa.filename}→${nodeId}`);
         if (edge) {
-          for (const mc of ipcCall.msgConstants ?? []) {
+          for (const mc of callMsgNames) {
             if (!edge.msgTypes.includes(mc)) edge.msgTypes.push(mc);
           }
         }
@@ -236,7 +240,7 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
         addExternalEdge(nodeId, fa.filename, ipcCall.type, true);
         const edge = edgeMap.get(`${nodeId}→${fa.filename}`);
         if (edge) {
-          for (const mc of ipcCall.msgConstants ?? []) {
+          for (const mc of callMsgNames) {
             if (!edge.msgTypes.includes(mc)) edge.msgTypes.push(mc);
           }
         }
