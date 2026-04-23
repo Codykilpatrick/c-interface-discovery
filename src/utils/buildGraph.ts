@@ -226,6 +226,7 @@ export function buildGraph(analysis: StringAnalysis, rankdir: RankDir = 'LR'): {
       const callMsgNames = [
         ...(ipcCall.msgConstants ?? []),
         ...(ipcCall.impliedStructs ?? []),
+        ...(ipcCall.candidateTypes ?? []),
       ];
       if (extIsSend) {
         addExternalEdge(fa.filename, nodeId, ipcCall.type, true);

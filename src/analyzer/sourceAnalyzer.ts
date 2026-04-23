@@ -318,8 +318,14 @@ export async function analyzeSource(
 
         // Find which custom pattern(s) this call matches
         for (const pattern of patterns) {
+          // Test against both the bare callee name and "name(" — patterns often end
+          // with \s*\( to match call syntax in the regex pass (full file text), but
+          // the tree-sitter callee capture is just the identifier without parens.
           let patternMatches = false;
-          try { patternMatches = new RegExp(pattern.pattern).test(calleeName); } catch { continue; }
+          try {
+            const re = new RegExp(pattern.pattern);
+            patternMatches = re.test(calleeName) || re.test(calleeName + '(');
+          } catch { continue; }
           if (!patternMatches) continue;
 
           // Find the already-pushed IpcCall for this pattern (matched by type + direction + externalName)
