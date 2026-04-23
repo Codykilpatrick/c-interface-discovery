@@ -281,8 +281,8 @@ export function buildAppGraph(
         const edgeTarget = isSend ? extId : g.id;
         addOrMerge(edgeSource, edgeTarget, syntheticIface.msgTypeConstant, syntheticIface, true);
 
-        // Also link any MessageInterfaces from this analysis that were resolved from this call's
-        // argument constants or implied struct names, so the edge detail panel shows them.
+        // Link MessageInterfaces to this external edge via two mechanisms:
+        // 1. Argument constants / implied struct names extracted from the call site.
         const linkedConstants = [
           ...(call.msgConstants ?? []),
           ...(call.missingConstants ?? []),
@@ -291,6 +291,15 @@ export function buildAppGraph(
         for (const name of linkedConstants) {
           const iface = g.analysis!.messageInterfaces.find((m) => m.msgTypeConstant === name);
           if (iface) addOrMerge(edgeSource, edgeTarget, name, iface, true);
+        }
+        // 2. Any struct-based MessageInterface whose fileRoles already include this file
+        //    (found via struct pattern reference-finding, independent of sizeof extraction).
+        for (const iface of g.analysis!.messageInterfaces) {
+          if (iface.msgTypeValue !== '(struct)' && iface.msgTypeValue !== '(implied from wrapper)') continue;
+          if (!iface.fileRoles.some((r) => r.filename === file.filename)) continue;
+          if (iface.msgTypeConstant === syntheticIface.msgTypeConstant) continue;
+          if (linkedConstants.includes(iface.msgTypeConstant)) continue;
+          addOrMerge(edgeSource, edgeTarget, iface.msgTypeConstant, iface, true);
         }
       }
     }
