@@ -131,6 +131,15 @@ export interface CustomPattern {
   isExternal?: boolean;
   /** Name of the external system (e.g. "Hydra"). Patterns sharing a name share a node. */
   externalName?: string;
+  /** 0-based index of the argument holding the message ID constant. When set, Strategy A
+   *  only extracts from this position and uses a relaxed identifier regex (not ALL_CAPS). */
+  msgArgIndex?: number;
+  /** Regex tested against extracted identifier names to classify them as message constants.
+   *  Used by isMsgConstant() in addition to the built-in MSG_TYPE_ / MSG_ID_ prefixes. */
+  msgConstantPattern?: string;
+  /** 0-based index of the callback function argument. When set, Strategy C looks up that
+   *  function's definition to extract its parameter struct types. */
+  callbackArgIndex?: number;
 }
 
 export interface MsgStructPattern {

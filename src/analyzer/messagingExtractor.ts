@@ -39,7 +39,10 @@ const RECV_CALLS = new Set([
 function isMsgConstant(name: string, customPatterns: CustomPattern[]): boolean {
   if (MSG_CONSTANT_PATTERNS.some((re) => re.test(name))) return true;
   return customPatterns.some((p) => {
-    try { return new RegExp(p.pattern).test(name); } catch { return false; }
+    if (p.msgConstantPattern) {
+      try { return new RegExp(p.msgConstantPattern).test(name); } catch { return false; }
+    }
+    return false;
   });
 }
 

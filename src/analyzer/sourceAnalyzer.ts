@@ -383,20 +383,37 @@ export async function analyzeSource(
               }
             };
 
-            for (const argChild of argsCapture.node.children) {
+            // When msgArgIndex is set, only extract from that argument position and use a
+            // relaxed identifier regex (not ALL_CAPS) since mixed-case IDs like my_MSG_ID
+            // need to be captured.
+            const IDENT_RE = /^[A-Za-z_]\w*$/;
+            const argNodes = argsCapture.node.children.filter(
+              (c) => c.type !== ',' && c.type !== '(' && c.type !== ')'
+            );
+
+            const processArgNode = (argChild: import('web-tree-sitter').SyntaxNode, loose: boolean) => {
+              const testId = loose
+                ? (id: string) => IDENT_RE.test(id)
+                : (id: string) => ALL_CAPS_RE.test(id);
               if (argChild.type === 'identifier') {
-                recordConstant(nodeText(argChild));
+                if (testId(nodeText(argChild))) recordConstant(nodeText(argChild));
               } else if (argChild.type === 'cast_expression') {
-                // (TYPE)IDENTIFIER or (TYPE)sizeof(STRUCT) — extract the value node
                 const valueNode = argChild.childForFieldName('value') ?? argChild.lastChild;
                 if (valueNode?.type === 'identifier') {
-                  recordConstant(nodeText(valueNode));
+                  if (testId(nodeText(valueNode))) recordConstant(nodeText(valueNode));
                 } else if (valueNode?.type === 'sizeof_expression') {
                   recordSizeof(valueNode);
                 }
               } else if (argChild.type === 'sizeof_expression') {
                 recordSizeof(argChild);
               }
+            };
+
+            if (pattern.msgArgIndex !== undefined) {
+              const targetArg = argNodes[pattern.msgArgIndex];
+              if (targetArg) processArgNode(targetArg, /* loose= */ true);
+            } else {
+              for (const argChild of argNodes) processArgNode(argChild, /* loose= */ false);
             }
           }
 
@@ -425,6 +442,48 @@ export async function analyzeSource(
                     }
                   } else if (rawType.length > 1 && /^[A-Za-z_]\w*$/.test(rawType)) {
                     // Looks like a type name but isn't in typeDict — likely from an unresolved external header
+                    existingCall.candidateTypes = existingCall.candidateTypes ?? [];
+                    if (!existingCall.candidateTypes.includes(rawType)) {
+                      existingCall.candidateTypes.push(rawType);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Strategy C: extract struct types from a callback function passed as an argument.
+          // Looks up the callback by name in the current file's function definitions and
+          // inspects its parameter types — gives direct struct info without naming heuristics.
+          if (pattern.callbackArgIndex !== undefined && argsCapture) {
+            const cbArgNodes = argsCapture.node.children.filter(
+              (c) => c.type !== ',' && c.type !== '(' && c.type !== ')'
+            );
+            const cbArgNode = cbArgNodes[pattern.callbackArgIndex];
+            let callbackName: string | null = null;
+            if (cbArgNode) {
+              if (cbArgNode.type === 'identifier') {
+                callbackName = nodeText(cbArgNode);
+              } else if (cbArgNode.type === 'cast_expression') {
+                const val = cbArgNode.childForFieldName('value') ?? cbArgNode.lastChild;
+                if (val?.type === 'identifier') callbackName = nodeText(val);
+              }
+            }
+            if (callbackName) {
+              const cbFn = functions.find((f) => f.name === callbackName);
+              if (cbFn) {
+                for (const param of cbFn.params) {
+                  const rawType = param.type
+                    .replace(/\bconst\b|\bvolatile\b|\bstruct\b|\bunion\b/g, '')
+                    .replace(/\*/g, '')
+                    .trim();
+                  if (!rawType || rawType.length < 2 || !/^[A-Za-z_]\w*$/.test(rawType)) continue;
+                  if (structNames.has(rawType)) {
+                    existingCall.impliedStructs = existingCall.impliedStructs ?? [];
+                    if (!existingCall.impliedStructs.includes(rawType)) {
+                      existingCall.impliedStructs.push(rawType);
+                    }
+                  } else {
                     existingCall.candidateTypes = existingCall.candidateTypes ?? [];
                     if (!existingCall.candidateTypes.includes(rawType)) {
                       existingCall.candidateTypes.push(rawType);

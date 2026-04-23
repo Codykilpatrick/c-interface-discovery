@@ -30,6 +30,9 @@ const EMPTY_FORM: {
   notes: string;
   isExternal: boolean;
   externalName: string;
+  msgArgIndex: string;
+  callbackArgIndex: string;
+  msgConstantPattern: string;
 } = {
   name: '',
   fnName: '',
@@ -39,6 +42,9 @@ const EMPTY_FORM: {
   notes: '',
   isExternal: false,
   externalName: '',
+  msgArgIndex: '',
+  callbackArgIndex: '',
+  msgConstantPattern: '',
 };
 
 /** Escape a string for use in a regex. */
@@ -98,6 +104,8 @@ export default function PatternRegistry({
     if (!name) return;
     if (!validateRegex(effectivePattern)) return;
 
+    const parsedMsgArgIndex = form.msgArgIndex.trim() !== '' ? parseInt(form.msgArgIndex.trim(), 10) : undefined;
+    const parsedCbArgIndex = form.callbackArgIndex.trim() !== '' ? parseInt(form.callbackArgIndex.trim(), 10) : undefined;
     const payload: Omit<CustomPattern, 'id'> = {
       name,
       pattern: effectivePattern,
@@ -106,6 +114,9 @@ export default function PatternRegistry({
       notes: form.notes,
       isExternal: form.isExternal,
       externalName: form.isExternal ? form.externalName.trim() : undefined,
+      msgArgIndex: !isNaN(parsedMsgArgIndex!) ? parsedMsgArgIndex : undefined,
+      callbackArgIndex: !isNaN(parsedCbArgIndex!) ? parsedCbArgIndex : undefined,
+      msgConstantPattern: form.msgConstantPattern.trim() || undefined,
     };
 
     if (editingId) {
@@ -120,7 +131,7 @@ export default function PatternRegistry({
   function handleEdit(p: CustomPattern) {
     setEditingId(p.id);
     setMode('advanced');
-    setForm({ ...EMPTY_FORM, name: p.name, pattern: p.pattern, ipcType: p.ipcType, direction: p.direction, notes: p.notes, isExternal: p.isExternal ?? false, externalName: p.externalName ?? '' });
+    setForm({ ...EMPTY_FORM, name: p.name, pattern: p.pattern, ipcType: p.ipcType, direction: p.direction, notes: p.notes, isExternal: p.isExternal ?? false, externalName: p.externalName ?? '', msgArgIndex: p.msgArgIndex !== undefined ? String(p.msgArgIndex) : '', callbackArgIndex: p.callbackArgIndex !== undefined ? String(p.callbackArgIndex) : '', msgConstantPattern: p.msgConstantPattern ?? '' });
   }
 
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -304,6 +315,28 @@ export default function PatternRegistry({
                 onChange={(e) => setForm((f) => ({ ...f, externalName: e.target.value }))}
               />
             )}
+            <input
+              className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"
+              placeholder="Msg arg index (e.g. 1)"
+              type="number"
+              min={0}
+              value={form.msgArgIndex}
+              onChange={(e) => setForm((f) => ({ ...f, msgArgIndex: e.target.value }))}
+            />
+            <input
+              className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"
+              placeholder="Callback arg index (e.g. 2)"
+              type="number"
+              min={0}
+              value={form.callbackArgIndex}
+              onChange={(e) => setForm((f) => ({ ...f, callbackArgIndex: e.target.value }))}
+            />
+            <input
+              className="col-span-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 font-mono placeholder-gray-600"
+              placeholder="Msg constant regex (e.g. _MSG_ID$) — matches mixed-case message ID names"
+              value={form.msgConstantPattern}
+              onChange={(e) => setForm((f) => ({ ...f, msgConstantPattern: e.target.value }))}
+            />
           </div>
 
           <div className="flex gap-2 pt-1">
