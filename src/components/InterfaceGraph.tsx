@@ -24,7 +24,6 @@ import {
   buildGraph,
 
   type EdgeDirection,
-  type ExternalNode,
   type MsgEdge,
   type MsgEdgeData,
   type ProcessNode,
@@ -93,22 +92,25 @@ const DIRECTION_COLOR: Record<EdgeDirection, string> = {
 // ── Custom node ───────────────────────────────────────────────────────────────
 
 function ProcessNodeComponent({ data, selected, id }: NodeProps<ProcessNode>) {
-  const { label, ipcTypes, hasUnknown } = data as ProcessNodeData;
+  const { label, ipcTypes, hasUnknown, hasDangling } = data as ProcessNodeData;
   const { selectedNodeId, connectedNodeIds, searchMatchIds } = useContext(SelectionContext);
   const isSelected = id === selectedNodeId;
   const isSearchMatch = searchMatchIds !== null && searchMatchIds.has(id);
   const isDimmed = searchMatchIds !== null
     ? !isSearchMatch
     : selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
+  const borderColor = isSelected || selected || isSearchMatch
+    ? '#60a5fa'
+    : hasDangling ? '#d97706' : '#374151';
   return (
     <div
       className="bg-gray-900 rounded-lg px-3 py-2 w-48 shadow-lg transition-all cursor-pointer group"
       style={{
-        border: `2px solid ${isSelected || selected || isSearchMatch ? '#60a5fa' : '#374151'}`,
+        border: `2px solid ${borderColor}`,
         opacity: isDimmed ? 0.15 : 1,
       }}
       onMouseEnter={(e) => { if (!isSelected && !selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#6b7280'; }}
-      onMouseLeave={(e) => { if (!isSelected && !selected) (e.currentTarget as HTMLDivElement).style.borderColor = '#374151'; }}
+      onMouseLeave={(e) => { if (!isSelected && !selected) (e.currentTarget as HTMLDivElement).style.borderColor = borderColor; }}
     >
       <Handle type="target" position={Position.Left}  style={{ background: '#4b5563' }} />
       <Handle type="source" position={Position.Right} style={{ background: '#4b5563' }} />
@@ -134,38 +136,9 @@ function ProcessNodeComponent({ data, selected, id }: NodeProps<ProcessNode>) {
       {hasUnknown && (
         <div className="text-[10px] text-yellow-500 opacity-70">⚠ unknown calls</div>
       )}
-    </div>
-  );
-}
-
-// ── External phantom node ─────────────────────────────────────────────────────
-
-function ExternalNodeComponent({ selected, id, data }: NodeProps<ExternalNode>) {
-  const { selectedNodeId, connectedNodeIds, searchMatchIds } = useContext(SelectionContext);
-  const isSelected = id === selectedNodeId;
-  const isSearchMatch = searchMatchIds !== null && searchMatchIds.has(id);
-  const isDimmed = searchMatchIds !== null
-    ? !isSearchMatch
-    : selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
-  const isNamed = data.label !== '? External';
-  return (
-    <div
-      className="rounded-lg px-3 py-2 w-36 flex flex-col items-center justify-center"
-      style={{
-        border: `2px dashed ${selected || isSelected ? '#94a3b8' : '#4b5563'}`,
-        background: 'rgba(17,24,39,0.7)',
-        opacity: isDimmed ? 0.25 : 1,
-      }}
-    >
-      <Handle type="target" position={Position.Left}  style={{ background: '#374151' }} />
-      <Handle type="source" position={Position.Right} style={{ background: '#374151' }} />
-      {isNamed
-        ? <div className="text-xs text-gray-300 font-mono text-center break-all">{data.label}</div>
-        : <>
-            <div className="text-2xl text-gray-600 leading-none mb-1">?</div>
-            <div className="text-xs text-gray-500 font-mono">{data.label}</div>
-          </>
-      }
+      {hasDangling && (
+        <div className="text-[10px] text-amber-600 opacity-80">⚠ incomplete edges</div>
+      )}
     </div>
   );
 }
@@ -250,8 +223,7 @@ function MsgEdgeComponent({
 }
 
 const nodeTypes: NodeTypes = {
-  processNode:  ProcessNodeComponent,
-  externalNode: ExternalNodeComponent,
+  processNode: ProcessNodeComponent,
 };
 const edgeTypes: EdgeTypes = { msgEdge: MsgEdgeComponent };
 
@@ -368,7 +340,7 @@ function InterfaceGraphInner({ analysis, onSelectFile, onBack, appName }: Interf
   const { fitView } = useReactFlow();
   const [rankdir, setRankdir] = useState<RankDir>('LR');
   const { nodes: initialNodes, edges } = useMemo(() => buildGraph(analysis, rankdir), [analysis, rankdir]);
-  const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNode | ExternalNode>(initialNodes);
+  const [nodes, setNodes, onNodesChange] = useNodesState<ProcessNode>(initialNodes);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -532,9 +504,7 @@ function InterfaceGraphInner({ analysis, onSelectFile, onBack, appName }: Interf
               const nodeId = node.id;
               setSelectedNodeId((prev) => prev === nodeId ? null : nodeId);
               setDetailPanel(null);
-              if (node.type !== 'externalNode') {
-                onSelectFile(node.data.filename as string);
-              }
+              onSelectFile(node.data.filename as string);
             }}
             onPaneClick={() => { setSelectedNodeId(null); setDetailPanel(null); }}
             colorMode="dark"

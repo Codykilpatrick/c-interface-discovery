@@ -23,9 +23,9 @@ import FileTabs from './components/FileTabs';
 import WarningBanner from './components/WarningBanner';
 import PatternRegistryUI from './components/PatternRegistry';
 import MsgStructPatternsUI from './components/MsgStructPatterns';
-import ExternalInterfacesSummary from './components/ExternalInterfacesSummary';
 import ApplicationGraph from './components/ApplicationGraph';
 import InterfaceGraph from './components/InterfaceGraph';
+import InterfaceModeView from './components/InterfaceModeView';
 import FunctionsSection from './components/sections/FunctionsSection';
 import IpcSection from './components/sections/IpcSection';
 import StructsSection from './components/sections/StructsSection';
@@ -55,10 +55,12 @@ export default function App() {
   const [externalEntries, setExternalEntries] = useState<FileRegistryEntry[]>([]);
   const [analyzingApps, setAnalyzingApps] = useState<Set<string>>(new Set());
 
+  // Top-level mode: IPC graph vs Interface catalog
+  const [appMode, setAppMode] = useState<'ipc' | 'interface'>('ipc');
+
   // null = app-level view; string = drill-down into that app
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
-  const [view, setView] = useState<'interfaces' | 'per-file'>('interfaces');
   const [autoFullscreenAppGraph, setAutoFullscreenAppGraph] = useState(false);
 
   const [patterns, setPatterns] = useState<CustomPattern[]>(() => patternRegistry.getAll());
@@ -570,6 +572,22 @@ export default function App() {
         </div>
         <div className="flex gap-2 items-center">
           {hasAnyFiles && (
+            <div className="flex rounded overflow-hidden border border-gray-700 text-xs">
+              <button
+                className={`px-3 py-1.5 transition-colors ${appMode === 'ipc' ? 'bg-blue-800/70 text-blue-200' : 'bg-gray-800 text-gray-500 hover:text-gray-300'}`}
+                onClick={() => setAppMode('ipc')}
+              >
+                IPC
+              </button>
+              <button
+                className={`px-3 py-1.5 transition-colors ${appMode === 'interface' ? 'bg-blue-800/70 text-blue-200' : 'bg-gray-800 text-gray-500 hover:text-gray-300'}`}
+                onClick={() => setAppMode('interface')}
+              >
+                Interface
+              </button>
+            </div>
+          )}
+          {hasAnyFiles && (
             <button
               className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-red-900/60 text-gray-500 hover:text-red-300 rounded transition-colors"
               onClick={handleClearSession}
@@ -577,7 +595,7 @@ export default function App() {
               Clear session
             </button>
           )}
-          {selectedAnalysis && (
+          {selectedAnalysis && appMode === 'ipc' && (
             <>
               <button
                 className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
@@ -609,8 +627,13 @@ export default function App() {
           </div>
         )}
 
+        {/* ── INTERFACE MODE ───────────────────────────────────────────────── */}
+        {appMode === 'interface' && (
+          <InterfaceModeView applications={applications} />
+        )}
+
         {/* ── DRILL-DOWN VIEW ─────────────────────────────────────────────── */}
-        {selectedApp && (
+        {appMode === 'ipc' && selectedApp && (
           <DrillDownView
             app={selectedApp}
             analysis={selectedAnalysis}
@@ -618,13 +641,10 @@ export default function App() {
             activeFile={activeFile}
             setActiveFile={(f) => {
               setActiveFile(f);
-              setView('per-file');
               window.scrollTo({ top: 0, behavior: 'instant' });
             }}
             activeFileAnalysis={activeFileAnalysis}
             activeFileStructs={activeFileStructs}
-            view={view}
-            setView={setView}
             sourceFiles={selectedApp.files.filter((f) => /\.(c|cpp)$/i.test(f.filename))}
             onAddAsPattern={setPatternPrefill}
             onAddAsMsgStructPattern={setMsgStructPrefill}
@@ -651,14 +671,13 @@ export default function App() {
               setAutoFullscreenAppGraph(wasFullscreen);
               setSelectedAppId(null);
               setActiveFile(null);
-              setView('interfaces');
               window.scrollTo({ top: 0, behavior: 'instant' });
             }}
           />
         )}
 
         {/* ── APP-LEVEL VIEW ──────────────────────────────────────────────── */}
-        {!selectedApp && (
+        {appMode === 'ipc' && !selectedApp && (
           <>
             {/* Application zones grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
@@ -740,7 +759,6 @@ export default function App() {
                     setAutoFullscreenAppGraph(false);
                     setSelectedAppId(appId);
                     setActiveFile(null);
-                    setView('interfaces');
                     window.scrollTo({ top: 0, behavior: 'instant' });
                   }}
                 />
@@ -976,8 +994,6 @@ interface DrillDownViewProps {
   setActiveFile: (f: string) => void;
   activeFileAnalysis: FileAnalysis | null;
   activeFileStructs: import('./analyzer/types').CStruct[];
-  view: 'interfaces' | 'per-file';
-  setView: (v: 'interfaces' | 'per-file') => void;
   sourceFiles: LoadedFile[];
   onAddAsPattern: (fn: string) => void;
   onAddAsMsgStructPattern: (name: string) => void;
@@ -1011,8 +1027,6 @@ function DrillDownView({
   setActiveFile,
   activeFileAnalysis,
   activeFileStructs,
-  view,
-  setView,
   sourceFiles,
   onAddAsPattern,
   onAddAsMsgStructPattern,
@@ -1066,57 +1080,31 @@ function DrillDownView({
             />
           </div>
 
-          {/* View tabs */}
-          <div className="flex gap-1 mb-4 border-b border-gray-800 pb-0">
-            {([
-              { id: 'interfaces', label: 'Interfaces' },
-              { id: 'per-file',   label: 'Per-file' },
-            ] as const).map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setView(tab.id)}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                  view === tab.id
-                    ? 'border-blue-500 text-blue-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-300'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div>
+            <FileTabs
+              files={analysis.files}
+              activeFile={activeFile}
+              onSelect={setActiveFile}
+            />
+            {activeFileAnalysis && (
+              <div className="space-y-2 mt-2">
+                <FunctionsSection functions={activeFileAnalysis.functions} />
+                <IpcSection ipc={activeFileAnalysis.ipc} />
+                <StructsSection
+                  structs={activeFileStructs}
+                  sourceFiles={sourceFiles}
+                  onAddAsMsgStructPattern={onAddAsMsgStructPattern}
+                />
+                <ExternsSection externs={activeFileAnalysis.externs} />
+                <DefinesSection defines={activeFileAnalysis.defines} />
+                <UnknownsSection
+                  unknownCalls={activeFileAnalysis.unknownCalls}
+                  onAddAsPattern={onAddAsPattern}
+                />
+                <RiskSection risks={activeFileAnalysis.risks} />
+              </div>
+            )}
           </div>
-
-          {view === 'interfaces' && (
-            <ExternalInterfacesSummary analysis={analysis} sourceFiles={sourceFiles} />
-          )}
-
-          {view === 'per-file' && (
-            <div>
-              <FileTabs
-                files={analysis.files}
-                activeFile={activeFile}
-                onSelect={setActiveFile}
-              />
-              {activeFileAnalysis && (
-                <div className="space-y-2 mt-2">
-                  <FunctionsSection functions={activeFileAnalysis.functions} />
-                  <IpcSection ipc={activeFileAnalysis.ipc} />
-                  <StructsSection
-                    structs={activeFileStructs}
-                    sourceFiles={sourceFiles}
-                    onAddAsMsgStructPattern={onAddAsMsgStructPattern}
-                  />
-                  <ExternsSection externs={activeFileAnalysis.externs} />
-                  <DefinesSection defines={activeFileAnalysis.defines} />
-                  <UnknownsSection
-                    unknownCalls={activeFileAnalysis.unknownCalls}
-                    onAddAsPattern={onAddAsPattern}
-                  />
-                  <RiskSection risks={activeFileAnalysis.risks} />
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Custom patterns */}
           <div className="mt-8 border-t border-gray-800 pt-6">

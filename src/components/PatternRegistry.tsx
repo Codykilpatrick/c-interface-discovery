@@ -28,11 +28,11 @@ const EMPTY_FORM: {
   ipcType: IpcType;
   direction: CustomPattern['direction'];
   notes: string;
-  isExternal: boolean;
-  externalName: string;
   msgArgIndex: string;
   callbackArgIndex: string;
   msgConstantPattern: string;
+  payloadArgIndex: string;
+  lengthArgIndex: string;
 } = {
   name: '',
   fnName: '',
@@ -40,11 +40,11 @@ const EMPTY_FORM: {
   ipcType: 'custom',
   direction: 'bidirectional',
   notes: '',
-  isExternal: false,
-  externalName: '',
   msgArgIndex: '',
   callbackArgIndex: '',
   msgConstantPattern: '',
+  payloadArgIndex: '',
+  lengthArgIndex: '',
 };
 
 /** Escape a string for use in a regex. */
@@ -106,17 +106,19 @@ export default function PatternRegistry({
 
     const parsedMsgArgIndex = form.msgArgIndex.trim() !== '' ? parseInt(form.msgArgIndex.trim(), 10) : undefined;
     const parsedCbArgIndex = form.callbackArgIndex.trim() !== '' ? parseInt(form.callbackArgIndex.trim(), 10) : undefined;
+    const parsedPayloadArgIndex = form.payloadArgIndex.trim() !== '' ? parseInt(form.payloadArgIndex.trim(), 10) : undefined;
+    const parsedLengthArgIndex = form.lengthArgIndex.trim() !== '' ? parseInt(form.lengthArgIndex.trim(), 10) : undefined;
     const payload: Omit<CustomPattern, 'id'> = {
       name,
       pattern: effectivePattern,
       ipcType: form.ipcType,
       direction: form.direction,
       notes: form.notes,
-      isExternal: form.isExternal,
-      externalName: form.isExternal ? form.externalName.trim() : undefined,
       msgArgIndex: !isNaN(parsedMsgArgIndex!) ? parsedMsgArgIndex : undefined,
       callbackArgIndex: !isNaN(parsedCbArgIndex!) ? parsedCbArgIndex : undefined,
       msgConstantPattern: form.msgConstantPattern.trim() || undefined,
+      payloadArgIndex: !isNaN(parsedPayloadArgIndex!) ? parsedPayloadArgIndex : undefined,
+      lengthArgIndex: !isNaN(parsedLengthArgIndex!) ? parsedLengthArgIndex : undefined,
     };
 
     if (editingId) {
@@ -131,7 +133,19 @@ export default function PatternRegistry({
   function handleEdit(p: CustomPattern) {
     setEditingId(p.id);
     setMode('advanced');
-    setForm({ ...EMPTY_FORM, name: p.name, pattern: p.pattern, ipcType: p.ipcType, direction: p.direction, notes: p.notes, isExternal: p.isExternal ?? false, externalName: p.externalName ?? '', msgArgIndex: p.msgArgIndex !== undefined ? String(p.msgArgIndex) : '', callbackArgIndex: p.callbackArgIndex !== undefined ? String(p.callbackArgIndex) : '', msgConstantPattern: p.msgConstantPattern ?? '' });
+    setForm({
+      ...EMPTY_FORM,
+      name: p.name,
+      pattern: p.pattern,
+      ipcType: p.ipcType,
+      direction: p.direction,
+      notes: p.notes,
+      msgArgIndex: p.msgArgIndex !== undefined ? String(p.msgArgIndex) : '',
+      callbackArgIndex: p.callbackArgIndex !== undefined ? String(p.callbackArgIndex) : '',
+      msgConstantPattern: p.msgConstantPattern ?? '',
+      payloadArgIndex: p.payloadArgIndex !== undefined ? String(p.payloadArgIndex) : '',
+      lengthArgIndex: p.lengthArgIndex !== undefined ? String(p.lengthArgIndex) : '',
+    });
   }
 
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -298,23 +312,6 @@ export default function PatternRegistry({
               value={form.notes}
               onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
             />
-            <label className="col-span-2 flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                className="accent-blue-500"
-                checked={form.isExternal}
-                onChange={(e) => setForm((f) => ({ ...f, isExternal: e.target.checked }))}
-              />
-              <span className="text-xs text-gray-300">Always draw to external node</span>
-            </label>
-            {form.isExternal && (
-              <input
-                className="col-span-2 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"
-                placeholder="External system name (e.g. Hydra) — leave blank for per-file node"
-                value={form.externalName}
-                onChange={(e) => setForm((f) => ({ ...f, externalName: e.target.value }))}
-              />
-            )}
             <input
               className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"
               placeholder="Msg arg index (e.g. 1)"
@@ -336,6 +333,25 @@ export default function PatternRegistry({
               placeholder="Msg constant regex (e.g. _MSG_ID$) — matches mixed-case message ID names"
               value={form.msgConstantPattern}
               onChange={(e) => setForm((f) => ({ ...f, msgConstantPattern: e.target.value }))}
+            />
+            <div className="col-span-2 text-[10px] text-gray-600 font-medium uppercase tracking-wider mt-1">
+              Interface Mode (payload resolution)
+            </div>
+            <input
+              className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"
+              placeholder="Payload arg index (e.g. 2)"
+              type="number"
+              min={0}
+              value={form.payloadArgIndex}
+              onChange={(e) => setForm((f) => ({ ...f, payloadArgIndex: e.target.value }))}
+            />
+            <input
+              className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 placeholder-gray-600"
+              placeholder="Length arg index (e.g. 3)"
+              type="number"
+              min={0}
+              value={form.lengthArgIndex}
+              onChange={(e) => setForm((f) => ({ ...f, lengthArgIndex: e.target.value }))}
             />
           </div>
 

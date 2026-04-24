@@ -23,11 +23,8 @@ import { useNodesState } from '@xyflow/react';
 import type { IpcType, MessageInterface } from '../analyzer/types';
 import {
   buildAppGraph,
-  APP_EXTERNAL_NODE_ID,
   type AppNode,
   type AppNodeData,
-  type AppExternalNode,
-  type AppExternalNodeData,
   type CrossAppEdge,
   type CrossAppEdgeData,
 } from '../utils/buildAppGraph';
@@ -125,31 +122,6 @@ function AppNodeComponent({ data, selected, id }: NodeProps<AppNode>) {
   );
 }
 
-// ── External phantom node ─────────────────────────────────────────────────────
-
-function AppExternalNodeComponent({ selected, id, data }: NodeProps<AppExternalNode>) {
-  const { selectedNodeId, connectedNodeIds, searchMatchIds } = useContext(SelectionCtx);
-  const isSelected = id === selectedNodeId;
-  const isSearchMatch = searchMatchIds !== null && searchMatchIds.has(id);
-  const isDimmed = searchMatchIds !== null
-    ? !isSearchMatch
-    : selectedNodeId !== null && !isSelected && !connectedNodeIds.has(id);
-  return (
-    <div
-      className="rounded-lg px-3 py-2 w-36 flex flex-col items-center justify-center"
-      style={{
-        border: `2px dashed ${selected || isSelected ? '#94a3b8' : '#4b5563'}`,
-        background: 'rgba(17,24,39,0.7)',
-        opacity: isDimmed ? 0.25 : 1,
-      }}
-    >
-      <Handle type="target" position={Position.Left}  style={{ background: '#374151' }} />
-      <Handle type="source" position={Position.Right} style={{ background: '#374151' }} />
-      <div className="text-2xl text-gray-600 leading-none mb-1">?</div>
-      <div className="text-xs text-gray-500 font-mono">{(data as AppExternalNodeData).label}</div>
-    </div>
-  );
-}
 
 // ── Cross-app edge ────────────────────────────────────────────────────────────
 
@@ -246,8 +218,7 @@ function CrossAppEdgeComponent({
 }
 
 const nodeTypes: NodeTypes = {
-  appNode:         AppNodeComponent,
-  appExternalNode: AppExternalNodeComponent,
+  appNode: AppNodeComponent,
 };
 const edgeTypes: EdgeTypes = { crossAppEdge: CrossAppEdgeComponent };
 
@@ -361,7 +332,7 @@ interface ApplicationGraphProps {
 function ApplicationGraphInner({ groups, onDrillDown, autoFullscreen }: ApplicationGraphProps) {
   const [rankdir, setRankdir] = useState<RankDir>('LR');
   const { nodes: initialNodes, edges } = useMemo(() => buildAppGraph(groups, rankdir), [groups, rankdir]);
-  const [nodes, setNodes, onNodesChange] = useNodesState<AppNode | AppExternalNode>(initialNodes);
+  const [nodes, setNodes, onNodesChange] = useNodesState<AppNode>(initialNodes);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [detailPanel, setDetailPanel] = useState<{
     edgeId: string;
@@ -426,15 +397,13 @@ function ApplicationGraphInner({ groups, onDrillDown, autoFullscreen }: Applicat
     return { connectedEdgeIds: edgeIds, connectedNodeIds: nodeIds };
   }, [selectedNodeId, edges]);
 
-  // Search: match node labels (app name or external label)
+  // Search: match node labels (app name)
   const searchMatchIds = useMemo<Set<string> | null>(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return null;
     const matched = new Set<string>();
     for (const node of nodes) {
-      const label = node.type === 'appNode'
-        ? (node.data as AppNodeData).label
-        : (node.data as AppExternalNodeData).label;
+      const label = (node.data as AppNodeData).label;
       if (label.toLowerCase().includes(q)) matched.add(node.id);
     }
     return matched;
@@ -515,9 +484,7 @@ function ApplicationGraphInner({ groups, onDrillDown, autoFullscreen }: Applicat
               onNodeClick={(_, node) => {
                 const nodeId = node.id;
                 setSelectedNodeId((prev) => (prev === nodeId ? null : nodeId));
-                if (nodeId !== APP_EXTERNAL_NODE_ID && !node.id.startsWith('__app_external__')) {
-                  onDrillDown(nodeId);
-                }
+                onDrillDown(nodeId);
               }}
               onPaneClick={() => { setSelectedNodeId(null); setDetailPanel(null); }}
               colorMode="dark"

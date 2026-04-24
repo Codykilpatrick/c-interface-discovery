@@ -126,9 +126,6 @@ function inferDirection(
     if (!referencingFiles.has(a.filename)) continue;
 
     for (const ipcCall of a.ipc) {
-      // Skip external calls — they describe outbound connections to named external
-      // systems and must not bleed into direction inference for internal interfaces.
-      if (ipcCall.isExternal) continue;
       const callName = ipcCall.detail.split('(')[0].trim().toLowerCase();
       const isSend = SEND_CALLS.has(callName) || ipcCall.type === 'socket-send' || ipcCall.direction === 'send' || ipcCall.direction === 'bidirectional';
       const isRecv = RECV_CALLS.has(callName) || ipcCall.type === 'socket-recv'
@@ -159,9 +156,6 @@ function computeFileRoles(refs: FileRef[], analyses: FileAnalysis[]): MsgFileRol
     let hasSend = false;
     let hasRecv = false;
     for (const ipcCall of a.ipc) {
-      // Skip external calls — they describe outbound connections to named external
-      // systems and must not bleed into direction inference for internal interfaces.
-      if (ipcCall.isExternal) continue;
       const name = ipcCall.detail.split('(')[0].trim().toLowerCase();
       // Check by call name, IPC type, or explicit direction from custom patterns
       if (SEND_CALLS.has(name) || ipcCall.type === 'socket-send'

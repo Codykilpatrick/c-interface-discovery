@@ -20,42 +20,23 @@ export interface CrossAppEdgeData extends Record<string, unknown> {
   confident: boolean;
 }
 
-export interface AppExternalNodeData extends Record<string, unknown> {
-  label: string;
-}
-
-export type AppNode         = Node<AppNodeData,         'appNode'>;
-export type CrossAppEdge    = Edge<CrossAppEdgeData,    'crossAppEdge'>;
-export type AppExternalNode = Node<AppExternalNodeData, 'appExternalNode'>;
-
-export const APP_EXTERNAL_NODE_ID = '__app_external__';
-
-export function appExternalNodeId(externalName?: string): string {
-  return externalName
-    ? `__app_external__${externalName.toLowerCase().replace(/\s+/g, '_')}`
-    : APP_EXTERNAL_NODE_ID;
-}
-
-export function appExternalNodeLabel(externalName?: string): string {
-  return externalName ? `? ${externalName}` : '? External';
-}
+export type AppNode      = Node<AppNodeData,      'appNode'>;
+export type CrossAppEdge = Edge<CrossAppEdgeData, 'crossAppEdge'>;
 
 const NODE_W = 200;
 const NODE_H = 90;
-const EXTERNAL_W = 140;
-const EXTERNAL_H = 60;
 
 export function buildAppGraph(
   groups: Array<{ id: string; name: string; analysis: StringAnalysis | null }>,
   rankdir: RankDir = 'LR'
 ): {
-  nodes: (AppNode | AppExternalNode)[];
+  nodes: AppNode[];
   edges: CrossAppEdge[];
 } {
   const analyzedGroups = groups.filter((g) => g.analysis !== null);
 
   // ── 1. Build app nodes ──────────────────────────────────────────────────────
-  const nodeMap = new Map<string, AppNode | AppExternalNode>();
+  const nodeMap = new Map<string, AppNode>();
 
   for (const g of groups) {
     const ipcTypes = g.analysis
@@ -197,102 +178,13 @@ export function buildAppGraph(
       }
     }
 
-    // Phantom edges for message constants with no peer in loaded apps → generic external.
-    // Skip the phantom only if this specific constant is explicitly handled by an isExternal
-    // call in that app (tracked via msgConstants). A broad "app has any isExternal call"
-    // check incorrectly suppresses phantom edges for unrelated message constants.
-    if (producers.length > 0 && consumers.length === 0) {
-      for (const prodId of producers) {
-        const group = analyzedGroups.find((g) => g.id === prodId);
-        const coveredByExternal = group?.analysis?.files.some((f) =>
-          f.ipc.some((c) => c.isExternal &&
-            (c.direction === 'send' || c.direction === 'bidirectional' || c.direction === 'control') &&
-            c.msgConstants?.includes(msgConst))
-        );
-        if (coveredByExternal) continue;
-        if (!nodeMap.has(APP_EXTERNAL_NODE_ID)) {
-          nodeMap.set(APP_EXTERNAL_NODE_ID, {
-            id: APP_EXTERNAL_NODE_ID,
-            type: 'appExternalNode',
-            position: { x: 0, y: 0 },
-            data: { label: '? External' },
-          });
-        }
-        const iface = interfaces.get(prodId)!;
-        addOrMerge(prodId, APP_EXTERNAL_NODE_ID, msgConst, iface, false);
-      }
-    }
-    if (consumers.length > 0 && producers.length === 0) {
-      for (const consId of consumers) {
-        const group = analyzedGroups.find((g) => g.id === consId);
-        const coveredByExternal = group?.analysis?.files.some((f) =>
-          f.ipc.some((c) => c.isExternal &&
-            (c.direction === 'recv' || c.direction === 'bidirectional') &&
-            c.msgConstants?.includes(msgConst))
-        );
-        if (coveredByExternal) continue;
-        if (!nodeMap.has(APP_EXTERNAL_NODE_ID)) {
-          nodeMap.set(APP_EXTERNAL_NODE_ID, {
-            id: APP_EXTERNAL_NODE_ID,
-            type: 'appExternalNode',
-            position: { x: 0, y: 0 },
-            data: { label: '? External' },
-          });
-        }
-        const iface = interfaces.get(consId)!;
-        addOrMerge(APP_EXTERNAL_NODE_ID, consId, msgConst, iface, false);
-      }
-    }
-  }
-
-  // ── 3b. External IPC call nodes (custom patterns with isExternal=true) ────────
-  // These are function-call patterns (e.g. "bummer_send") that explicitly target
-  // a named external system. They don't correspond to message type constants so
-  // they're not captured by the msgMap loop above.
-  for (const g of analyzedGroups) {
-    for (const file of g.analysis!.files) {
-      for (const call of file.ipc) {
-        if (!call.isExternal) continue;
-        const extId  = appExternalNodeId(call.externalName);
-        const extLabel = appExternalNodeLabel(call.externalName);
-        if (!nodeMap.has(extId)) {
-          nodeMap.set(extId, {
-            id: extId,
-            type: 'appExternalNode',
-            position: { x: 0, y: 0 },
-            data: { label: extLabel },
-          });
-        }
-        // Build a synthetic MessageInterface stub so addOrMerge has something to store
-        const syntheticIface = {
-          msgTypeConstant: call.externalName ?? call.detail,
-          msgTypeValue: '',
-          struct: null,
-          structResolved: false,
-          direction: (call.direction === 'recv' ? 'inbound' : 'outbound') as import('../analyzer/types').MsgDirection,
-          directionConfident: call.direction != null,
-          transport: call.type,
-          definedIn: file.filename,
-          usedIn: [],
-          fileRoles: [{ filename: file.filename, role: call.direction === 'recv' ? 'consumer' as const : 'producer' as const }],
-        };
-        const isSend = call.direction !== 'recv';
-        const edgeSource = isSend ? g.id : extId;
-        const edgeTarget = isSend ? extId : g.id;
-        addOrMerge(edgeSource, edgeTarget, syntheticIface.msgTypeConstant, syntheticIface, true);
-
-        // Link any MessageInterfaces extracted from this call's arguments.
-        // candidateTypes holds sizeof-extracted names that aren't in typeDict yet but
-        // may have been added as manual struct patterns — include them for lookup.
-        const linkedConstants = [
-          ...(call.msgConstants ?? []),
-          ...(call.missingConstants ?? []),
-          ...(call.impliedStructs ?? []),
-          ...(call.candidateTypes ?? []),
-        ];
-        for (const name of linkedConstants) {
-          const iface = g.analysis!.messageInterfaces.find((m) => m.msgTypeConstant === name);
-          if (iface) addOrMerge(edgeSource, edgeTarget, name, iface, true);
+    // Flag messages with no peer in loaded apps as incomplete
+    if ((producers.length > 0 && consumers.length === 0) || (consumers.length > 0 && producers.length === 0)) {
+      for (const group of analyzedGroups) {
+        for (const msgInterface of group.analysis!.messageInterfaces) {
+          if (msgInterface.msgTypeConstant === msgConst) {
+            msgInterface.incomplete = true;
+          }
         }
       }
     }
@@ -330,8 +222,7 @@ export function buildAppGraph(
   });
 
   for (const node of nodeMap.values()) {
-    const isExt = node.type === 'appExternalNode';
-    g.setNode(node.id, { width: isExt ? EXTERNAL_W : NODE_W, height: isExt ? EXTERNAL_H : NODE_H });
+    g.setNode(node.id, { width: NODE_W, height: NODE_H });
   }
   for (const e of edgeMap.values()) g.setEdge(e.source, e.target);
 
@@ -340,10 +231,7 @@ export function buildAppGraph(
   for (const node of nodeMap.values()) {
     const pos = g.node(node.id);
     if (pos) {
-      const isExt = node.type === 'appExternalNode';
-      const w = isExt ? EXTERNAL_W : NODE_W;
-      const h = isExt ? EXTERNAL_H : NODE_H;
-      node.position = { x: pos.x - w / 2, y: pos.y - h / 2 };
+      node.position = { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 };
     }
   }
 

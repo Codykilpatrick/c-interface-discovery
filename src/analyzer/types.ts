@@ -73,10 +73,6 @@ export interface IpcCall {
   detail: string;
   /** Explicit direction from a custom pattern — overrides type-based heuristics. */
   direction?: 'send' | 'recv' | 'bidirectional' | 'control';
-  /** If true, always draw an edge to an external node regardless of other edges. */
-  isExternal?: boolean;
-  /** Name of the external system — shared across patterns with the same name. */
-  externalName?: string;
   /** ALL_CAPS constant identifiers passed as arguments to this custom IPC call, found in typeDict.defines. */
   msgConstants?: string[];
   /** ALL_CAPS constant identifiers passed as arguments that were NOT found in typeDict.defines (missing headers). */
@@ -113,6 +109,7 @@ export interface MessageInterface {
   definedIn: string;
   usedIn: FileRef[];            // files that reference this constant, with line numbers
   fileRoles: MsgFileRole[];     // per-file producer/consumer role for graph edges
+  incomplete?: boolean;         // true when only producers or only consumers found in loaded files
 }
 
 export interface RiskFlag {
@@ -127,10 +124,6 @@ export interface CustomPattern {
   ipcType: IpcType;
   direction: 'send' | 'recv' | 'bidirectional' | 'control';
   notes: string;
-  /** Always draw an edge to an external node when this pattern matches. */
-  isExternal?: boolean;
-  /** Name of the external system (e.g. "Hydra"). Patterns sharing a name share a node. */
-  externalName?: string;
   /** 0-based index of the argument holding the message ID constant. When set, Strategy A
    *  only extracts from this position and uses a relaxed identifier regex (not ALL_CAPS). */
   msgArgIndex?: number;
@@ -140,6 +133,14 @@ export interface CustomPattern {
   /** 0-based index of the callback function argument. When set, Strategy C looks up that
    *  function's definition to extract its parameter struct types. */
   callbackArgIndex?: number;
+  /** 0-based index of the payload pointer/buffer argument (Interface Mode: payload type resolution). */
+  payloadArgIndex?: number;
+  /** 0-based index of the length/size argument (Interface Mode). */
+  lengthArgIndex?: number;
+  /** Name of another registered pattern this wraps (Interface Mode). */
+  isWrapperFor?: string;
+  /** Auto-detected as a transitive wrapper around a registered IPC function (Interface Mode). */
+  wrapperDetected?: boolean;
 }
 
 export interface MsgStructPattern {
@@ -160,6 +161,7 @@ export interface FileAnalysis {
   includes: { path: string; isLocal: boolean }[];
   risks: RiskFlag[];
   unknownCalls: string[];
+  payloadResolutions?: import('./payloadResolver').PayloadResolution[];
 }
 
 export interface TypeDict {
@@ -175,6 +177,9 @@ export interface StringAnalysis {
   customPatterns: CustomPattern[];
   msgStructPatterns: MsgStructPattern[];
   warnings: AnalysisWarning[];   // global warnings shown in banner
+  structCatalog?: import('./structLayoutEngine').StructCatalog;
+  layoutTarget?: '32bit' | '64bit';
+  payloadResolutions?: import('./payloadResolver').PayloadResolution[];
 }
 
 export interface AnalysisWarning {

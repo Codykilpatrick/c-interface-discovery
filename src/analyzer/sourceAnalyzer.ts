@@ -16,6 +16,8 @@ import type {
   TypeDict,
 } from './types';
 import { extractConditionalBlocks } from './preprocessor';
+import { resolvePayload } from './payloadResolver';
+import type { PayloadResolution } from './payloadResolver';
 
 // ─── IPC call name → IpcType mapping ─────────────────────────────────────────
 
@@ -176,6 +178,7 @@ export async function analyzeSource(
   const risks: RiskFlag[] = [];
   const calledNames = new Set<string>();
   const localFunctionNames = new Set<string>();
+  const payloadResolutions: PayloadResolution[] = [];
 
   // ── Function definitions ───────────────────────────────────────────────
   try {
@@ -281,8 +284,6 @@ export async function analyzeSource(
           type: pattern.ipcType,
           detail: `${pattern.name} (custom pattern, ${matches.length} match${matches.length > 1 ? 'es' : ''})`,
           direction: pattern.direction,
-          isExternal: pattern.isExternal,
-          externalName: pattern.externalName,
         });
       }
     } catch {
@@ -328,12 +329,10 @@ export async function analyzeSource(
           } catch { continue; }
           if (!patternMatches) continue;
 
-          // Find the already-pushed IpcCall for this pattern (matched by type + direction + externalName)
+          // Find the already-pushed IpcCall for this pattern (matched by type + direction)
           const existingCall = ipc.find(
             (c) => c.type === pattern.ipcType
               && c.direction === pattern.direction
-              && c.isExternal === pattern.isExternal
-              && c.externalName === pattern.externalName
           );
           if (!existingCall) continue;
 
@@ -493,6 +492,22 @@ export async function analyzeSource(
               }
             }
           }
+
+          // Payload resolution (Interface Mode): run if payloadArgIndex is configured
+          if (pattern.payloadArgIndex !== undefined) {
+            const callNode = calleeCapture.node.parent;
+            if (callNode) {
+              const resolution = resolvePayload({
+                callNode,
+                patternName: pattern.name,
+                payloadArgIndex: pattern.payloadArgIndex,
+                filename: file.filename,
+                impliedStructs: existingCall.impliedStructs ?? [],
+                typeDict,
+              });
+              payloadResolutions.push(resolution);
+            }
+          }
         }
       }
     } catch {
@@ -574,5 +589,6 @@ export async function analyzeSource(
     includes,
     risks,
     unknownCalls,
+    payloadResolutions: payloadResolutions.length > 0 ? payloadResolutions : undefined,
   };
 }

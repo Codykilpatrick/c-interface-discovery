@@ -4,6 +4,8 @@ import type { FileRegistry } from './fileRegistry';
 import { parseHeaders } from './headerParser';
 import { analyzeSource } from './sourceAnalyzer';
 import { extractMessageInterfaces } from './messagingExtractor';
+import { buildStructCatalog } from './structLayoutEngine';
+import type { LayoutOptions } from './structLayoutEngine';
 
 let _parser: Parser | null = null;
 
@@ -27,7 +29,8 @@ export async function initParser(): Promise<void> {
 export async function analyzeString(
   registry: FileRegistry,
   patterns: CustomPattern[],
-  msgStructPatterns: MsgStructPattern[] = []
+  msgStructPatterns: MsgStructPattern[] = [],
+  layoutOpts: LayoutOptions = { target: '64bit' },
 ): Promise<StringAnalysis> {
   if (!_parser) {
     throw new Error('Parser not initialized. Call initParser() first.');
@@ -76,6 +79,12 @@ export async function analyzeString(
   // Pass 4: Extract messaging interfaces (pass source files for content-based direction inference)
   const messageInterfaces = extractMessageInterfaces(fileAnalyses, typeDict, patterns, sources, msgStructPatterns);
 
+  // Pass 5: Build struct catalog with byte-level layout
+  const structCatalog = buildStructCatalog(typeDict, layoutOpts);
+
+  // Collect all payload resolutions from all source files
+  const payloadResolutions = fileAnalyses.flatMap((fa) => fa.payloadResolutions ?? []);
+
   return {
     files: fileAnalyses,
     typeDict,
@@ -83,6 +92,9 @@ export async function analyzeString(
     customPatterns: patterns,
     msgStructPatterns,
     warnings,
+    structCatalog,
+    layoutTarget: layoutOpts.target,
+    payloadResolutions: payloadResolutions.length > 0 ? payloadResolutions : undefined,
   };
 }
 

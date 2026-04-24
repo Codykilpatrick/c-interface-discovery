@@ -550,8 +550,6 @@ describe('messagingExtractor — enum msg IDs via isExternal wrapper', () => {
       type: 'custom',
       detail: 'bus_send_message (custom pattern, 2 matches)',
       direction: 'send',
-      isExternal: true,
-      externalName: 'Bus',
       msgConstants: ['NAV_UPDATE_MSGID', 'AUDIO_STATUS_MSGID'],
       impliedStructs: ['NavData', 'AudioStatus'],
     },
@@ -636,7 +634,6 @@ describe('extractMessageInterfaces — Strategy A + B deduplication', () => {
       msgConstants: ['NavData'],
       missingConstants: [],
       impliedStructs: ['NavData'],
-      isExternal: false,
     };
 
     const analysis = makeAnalysis('sender.c', [], [ipcCall]);
@@ -658,7 +655,6 @@ describe('extractMessageInterfaces — Strategy A + B deduplication', () => {
       msgConstants: ['MSG_NAV'],
       missingConstants: [],
       impliedStructs: ['NavData'],
-      isExternal: false,
     };
 
     const analysis = makeAnalysis('sender.c', [], [ipcCall]);
