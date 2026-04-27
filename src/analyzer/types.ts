@@ -168,6 +168,8 @@ export interface TypeDict {
   structs: CStruct[];
   enums: CEnum[];
   defines: CDefine[];
+  /** Plain typedef aliases: alias → canonical name. e.g. PASSBACK → DIST_PASSBACK */
+  typedefAliases?: Record<string, string>;
 }
 
 export interface StringAnalysis {

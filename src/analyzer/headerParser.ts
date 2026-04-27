@@ -260,6 +260,25 @@ export async function parseHeader(
     }
   }
 
+  // ── Typedef aliases ──────────────────────────────────────────────────────
+  // Capture plain `typedef ExistingType NewName;` (not struct/enum typedefs — those are handled above)
+  {
+    const aliasRe = /\btypedef\s+(\w+)\s+(\w+)\s*;/g;
+    let m: RegExpExecArray | null;
+    while ((m = aliasRe.exec(file.content)) !== null) {
+      const existing = m[1];
+      const alias = m[2];
+      // Skip if the alias is itself a struct/enum name already captured
+      const isStructOrEnum =
+        result.typeDict.structs.some((s) => s.name === alias) ||
+        result.typeDict.enums.some((e) => e.name === alias);
+      if (!isStructOrEnum) {
+        if (!result.typeDict.typedefAliases) result.typeDict.typedefAliases = {};
+        result.typeDict.typedefAliases[alias] = existing;
+      }
+    }
+  }
+
   // ── Encoding warning ─────────────────────────────────────────────────────
   if (file.encoding === 'latin-1') {
     result.warnings.push({
@@ -330,6 +349,16 @@ export async function parseHeaders(
     for (const d of r.typeDict.defines) {
       if (!combined.typeDict.defines.some((x) => x.name === d.name)) {
         combined.typeDict.defines.push(d);
+      }
+    }
+
+    // Merge typedef aliases (first wins)
+    if (r.typeDict.typedefAliases) {
+      if (!combined.typeDict.typedefAliases) combined.typeDict.typedefAliases = {};
+      for (const [alias, canonical] of Object.entries(r.typeDict.typedefAliases)) {
+        if (!(alias in combined.typeDict.typedefAliases)) {
+          combined.typeDict.typedefAliases[alias] = canonical;
+        }
       }
     }
 

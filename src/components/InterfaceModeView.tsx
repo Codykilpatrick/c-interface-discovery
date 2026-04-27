@@ -7,7 +7,7 @@ interface InterfaceModeViewProps {
   applications: ApplicationGroup[];
 }
 
-type Tab = 'catalog' | 'pivot' | 'send-sites';
+type Tab = 'catalog' | 'pivot' | 'interface-sites';
 
 export default function InterfaceModeView({ applications }: InterfaceModeViewProps) {
   const [tab, setTab] = useState<Tab>('catalog');
@@ -24,7 +24,7 @@ export default function InterfaceModeView({ applications }: InterfaceModeViewPro
         <h2 className="text-lg font-semibold text-gray-400 mb-2">Interface Mode</h2>
         <p className="text-sm text-gray-600 max-w-sm">
           Load source and header files in IPC mode first — Interface Mode shows struct layouts and
-          send-site analysis after a successful analysis run.
+          interface site analysis after a successful analysis run.
         </p>
       </div>
     );
@@ -33,7 +33,7 @@ export default function InterfaceModeView({ applications }: InterfaceModeViewPro
   const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: 'catalog', label: 'Struct Catalog', count: mergedCatalog.layouts.length },
     { id: 'pivot', label: 'Struct Pivot', count: allMsgInterfaces.filter((m) => m.struct).length },
-    { id: 'send-sites', label: 'Send Sites', count: allPayloadResolutions.length },
+    { id: 'interface-sites', label: 'Interface Sites', count: allPayloadResolutions.length },
   ];
 
   return (
@@ -71,7 +71,7 @@ export default function InterfaceModeView({ applications }: InterfaceModeViewPro
       {/* Tab content */}
       {tab === 'catalog' && <CatalogTab catalog={mergedCatalog} />}
       {tab === 'pivot' && <StructPivotTab applications={applications} catalog={mergedCatalog} />}
-      {tab === 'send-sites' && <SendSitesTab resolutions={allPayloadResolutions} />}
+      {tab === 'interface-sites' && <InterfaceSitesTab resolutions={allPayloadResolutions} />}
     </div>
   );
 }
@@ -300,7 +300,7 @@ function StructPivotTab({ applications, catalog }: { applications: ApplicationGr
   );
 }
 
-// ── Send Sites tab ────────────────────────────────────────────────────────────
+// ── Interface Sites tab ───────────────────────────────────────────────────────
 
 const CONFIDENCE_COLOR: Record<string, string> = {
   high:       'text-green-400 bg-green-900/30',
@@ -315,21 +315,44 @@ const STRATEGY_LABEL: Record<string, string> = {
   'cast':              'cast',
   'memcpy':            'memcpy',
   'msg-id-correlation':'msg-ID',
+  'callback':          'callback fn',
   'unresolved':        '?',
 };
 
-function SendSitesTab({ resolutions }: { resolutions: PayloadResolution[] }) {
+function exportInterfaceSites(resolutions: PayloadResolution[]) {
+  const rows = [
+    ['File', 'Line', 'Pattern', 'Struct', 'Confidence', 'Strategy', 'Call Site'].join('\t'),
+    ...resolutions.map((r) => [
+      r.sendSiteFile,
+      String(r.sendSiteLine),
+      r.patternName,
+      r.resolvedStructName ?? '',
+      r.confidence,
+      r.strategy,
+      r.sendSiteText.replace(/\t/g, ' '),
+    ].join('\t')),
+  ].join('\n');
+  const blob = new Blob([rows], { type: 'text/tab-separated-values' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'cid-interface-sites.tsv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function InterfaceSitesTab({ resolutions }: { resolutions: PayloadResolution[] }) {
   const [query, setQuery] = useState('');
 
   if (resolutions.length === 0) {
     return (
       <div className="py-12 text-center">
         <div className="text-2xl mb-3 text-gray-700">📡</div>
-        <h3 className="text-sm font-semibold text-gray-500 mb-1">No Send Sites Yet</h3>
+        <h3 className="text-sm font-semibold text-gray-500 mb-1">No Interface Sites Yet</h3>
         <p className="text-xs text-gray-600 max-w-sm mx-auto">
           Register IPC API patterns with a <span className="font-mono text-gray-500">payload arg index</span> in
-          Custom Patterns to enable send-site analysis. Each matching call will appear here with its
-          resolved struct type and confidence level.
+          Custom Patterns to enable interface site analysis. Each matching call (send or receive) will
+          appear here with its resolved struct type and confidence level.
         </p>
       </div>
     );
@@ -359,12 +382,20 @@ function SendSitesTab({ resolutions }: { resolutions: PayloadResolution[] }) {
 
   return (
     <div className="space-y-3">
-      {/* Stats bar */}
-      <div className="flex gap-4 text-xs">
-        <span className="text-green-400">{stats.high} high</span>
-        <span className="text-yellow-400">{stats.medium} medium</span>
-        <span className="text-orange-400">{stats.low} low</span>
-        <span className="text-red-400">{stats.unresolved} unresolved</span>
+      {/* Stats + export bar */}
+      <div className="flex items-center gap-4">
+        <div className="flex gap-4 text-xs flex-1">
+          <span className="text-green-400">{stats.high} high</span>
+          <span className="text-yellow-400">{stats.medium} medium</span>
+          <span className="text-orange-400">{stats.low} low</span>
+          <span className="text-red-400">{stats.unresolved} unresolved</span>
+        </div>
+        <button
+          className="shrink-0 px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+          onClick={() => exportInterfaceSites(resolutions)}
+        >
+          ↓ Export TSV
+        </button>
       </div>
 
       <input

@@ -11,6 +11,7 @@ export type PayloadStrategy =
   | 'cast'
   | 'memcpy'
   | 'msg-id-correlation'
+  | 'callback'
   | 'unresolved';
 
 export interface PayloadResolution {
@@ -57,14 +58,22 @@ function priorSiblings(callNode: Parser.SyntaxNode): Parser.SyntaxNode[] {
   return siblings;
 }
 
-/** Resolve a type name to a CStruct via typeDict, stripping struct/const/pointer qualifiers. */
+/** Resolve a type name to a CStruct via typeDict, stripping struct/const/pointer qualifiers.
+ *  Chases plain typedef aliases (e.g. PASSBACK → DIST_PASSBACK) up to 4 hops. */
 function resolveType(rawType: string, typeDict: TypeDict): CStruct | null {
-  const cleaned = rawType
+  let name = rawType
     .replace(/\b(const|volatile|restrict|struct|union)\b/g, '')
     .replace(/\*/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-  return typeDict.structs.find((s) => s.name === cleaned) ?? null;
+  for (let hops = 0; hops < 4; hops++) {
+    const found = typeDict.structs.find((s) => s.name === name);
+    if (found) return found;
+    const canonical = typeDict.typedefAliases?.[name];
+    if (!canonical || canonical === name) break;
+    name = canonical;
+  }
+  return null;
 }
 
 /**
@@ -169,16 +178,28 @@ function tryPointerParam(
   return null;
 }
 
+/** Primitive/opaque types that are not useful struct names. */
+const PRIMITIVE_TYPES = new Set([
+  'char', 'void', 'int', 'short', 'long', 'float', 'double',
+  'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
+  'int8_t', 'int16_t', 'int32_t', 'int64_t',
+  'size_t', 'ssize_t', 'ptrdiff_t', 'uintptr_t', 'intptr_t',
+  'byte', 'word', 'dword', 'bool',
+]);
+
 /**
  * Strategy 3 — cast expression (MEDIUM)
  * Arg is a cast_expression. If the cast value is &var, try address-of on the
  * inner node first (HIGH confidence) — e.g. (MESSAGE_POINTER) &msg → NavMsg.
- * Otherwise extract the type from the cast itself.
+ * If the cast type resolves to a known struct, return it.
+ * If the cast type is a primitive/opaque pointer (e.g. char*, void*), fall back
+ * to resolving the inner identifier's declared type or param type (HIGH).
  */
 function tryCast(
   argNode: Parser.SyntaxNode,
   statements: Parser.SyntaxNode[],
   typeDict: TypeDict,
+  fnNode?: Parser.SyntaxNode | null,
 ): { structName: string; struct: CStruct | null; fromInner?: boolean } | null {
   if (argNode.type !== 'cast_expression') return null;
   const value = argNode.childForFieldName('value') ?? argNode.lastChild;
@@ -194,7 +215,29 @@ function tryCast(
     .replace(/\*/g, '')
     .trim();
   if (!raw) return null;
-  return { structName: raw, struct: resolveType(raw, typeDict) };
+
+  const castStruct = resolveType(raw, typeDict);
+  if (castStruct) return { structName: raw, struct: castStruct };
+
+  // Cast type is primitive/opaque (char*, void*, etc.) — try to resolve the inner identifier
+  if (value && (PRIMITIVE_TYPES.has(raw) || !castStruct)) {
+    const innerIdent = value.type === 'identifier' ? value : null;
+    if (innerIdent) {
+      // Check local var declaration
+      const localType = findLocalVarType(statements, nodeText(innerIdent));
+      if (localType) {
+        const s = resolveType(localType, typeDict);
+        if (s) return { structName: localType, struct: s, fromInner: true };
+      }
+      // Check function parameter
+      if (fnNode) {
+        const paramResult = tryPointerParam(innerIdent, fnNode, typeDict);
+        if (paramResult?.struct) return { ...paramResult, fromInner: true };
+      }
+    }
+  }
+
+  return { structName: raw, struct: null };
 }
 
 /**
@@ -359,11 +402,11 @@ export function resolvePayload(input: PayloadResolverInput): PayloadResolution {
     return { ...base, resolvedStructName: s2.structName, resolvedStruct: s2.struct, confidence: 'high', strategy: 'pointer', notes: '' };
   }
 
-  // Strategy 3: cast (may recurse into &var inside the cast for higher confidence)
-  const s3 = tryCast(payloadArg, stmts, typeDict);
-  if (s3) {
+  // Strategy 3: cast (may recurse into &var or inner identifier for higher confidence)
+  const s3 = tryCast(payloadArg, stmts, typeDict, fnNode);
+  if (s3?.struct) {
     const confidence = s3.fromInner ? 'high' : 'medium';
-    const strategy = s3.fromInner ? 'address-of' : 'cast';
+    const strategy = s3.fromInner ? 'pointer' : 'cast';
     return { ...base, resolvedStructName: s3.structName, resolvedStruct: s3.struct, confidence, strategy, notes: '' };
   }
 

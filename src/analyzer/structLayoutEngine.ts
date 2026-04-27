@@ -119,19 +119,24 @@ function detectPackAttribute(struct: CStruct, typeDict: TypeDict): number | unde
 /** Build a map from typedef aliases to canonical struct names. */
 function buildTypedefMap(typeDict: TypeDict): Map<string, string> {
   const map = new Map<string, string>();
-  // Every struct name is its own canonical form
   for (const s of typeDict.structs) {
     map.set(s.name, s.name);
   }
-  // For typedefs: if a typedef name matches a struct name, it's an alias
-  // The headerParser stores typedefs implicitly: when a `typedef struct Foo Bar`
-  // is parsed, the struct gets name "Foo" and it's also referenced as "Bar".
-  // We look for structs that were parsed from typedef_name captures.
-  // Since CStruct doesn't store typedef info directly, we scan all struct names
-  // and look for ones that might be typedef aliases for other structs.
-  // Heuristic: if there are two structs with the same fields but different names,
-  // one is likely a typedef of the other. We can't resolve this perfectly without
-  // full AST info, so we just ensure struct names resolve to themselves.
+  // Include plain typedef aliases from headerParser (e.g. PASSBACK → DIST_PASSBACK)
+  if (typeDict.typedefAliases) {
+    for (const [alias, canonical] of Object.entries(typeDict.typedefAliases)) {
+      if (!map.has(alias)) {
+        // Chase the chain up to 4 hops
+        let resolved = canonical;
+        for (let i = 0; i < 4; i++) {
+          if (map.has(resolved)) { map.set(alias, map.get(resolved)!); break; }
+          const next = typeDict.typedefAliases[resolved];
+          if (!next || next === resolved) { map.set(alias, resolved); break; }
+          resolved = next;
+        }
+      }
+    }
+  }
   return map;
 }
 

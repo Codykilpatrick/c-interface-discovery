@@ -471,6 +471,7 @@ export async function analyzeSource(
             if (callbackName) {
               const cbFn = functions.find((f) => f.name === callbackName);
               if (cbFn) {
+                const callNode = calleeCapture.node.parent;
                 for (const param of cbFn.params) {
                   const rawType = param.type
                     .replace(/\bconst\b|\bvolatile\b|\bstruct\b|\bunion\b/g, '')
@@ -481,6 +482,23 @@ export async function analyzeSource(
                     existingCall.impliedStructs = existingCall.impliedStructs ?? [];
                     if (!existingCall.impliedStructs.includes(rawType)) {
                       existingCall.impliedStructs.push(rawType);
+                    }
+                    // Emit an Interface Sites entry for each struct found via the callback
+                    if (callNode) {
+                      const resolvedStruct = typeDict.structs.find((s) => s.name === rawType) ?? null;
+                      payloadResolutions.push({
+                        sendSiteFile: file.filename,
+                        sendSiteLine: callNode.startPosition.row + 1,
+                        sendSiteText: nodeText(callNode).substring(0, 200),
+                        patternName: pattern.name,
+                        resolvedStructName: rawType,
+                        resolvedStruct,
+                        msgIdConstant: null,
+                        msgIdValue: null,
+                        confidence: 'high',
+                        strategy: 'callback',
+                        notes: `via ${callbackName}()`,
+                      });
                     }
                   } else {
                     existingCall.candidateTypes = existingCall.candidateTypes ?? [];
