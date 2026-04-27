@@ -171,13 +171,22 @@ function tryPointerParam(
 
 /**
  * Strategy 3 — cast expression (MEDIUM)
- * Arg is a cast_expression; extract the type from the cast.
+ * Arg is a cast_expression. If the cast value is &var, try address-of on the
+ * inner node first (HIGH confidence) — e.g. (MESSAGE_POINTER) &msg → NavMsg.
+ * Otherwise extract the type from the cast itself.
  */
 function tryCast(
   argNode: Parser.SyntaxNode,
+  statements: Parser.SyntaxNode[],
   typeDict: TypeDict,
-): { structName: string; struct: CStruct | null } | null {
+): { structName: string; struct: CStruct | null; fromInner?: boolean } | null {
   if (argNode.type !== 'cast_expression') return null;
+  const value = argNode.childForFieldName('value') ?? argNode.lastChild;
+  // If the cast wraps &var, resolve the inner variable type (higher confidence)
+  if (value) {
+    const inner = tryAddressOf(value, statements, typeDict);
+    if (inner) return { ...inner, fromInner: true };
+  }
   const typeDesc = argNode.childForFieldName('type');
   if (!typeDesc) return null;
   const raw = nodeText(typeDesc)
@@ -186,6 +195,50 @@ function tryCast(
     .trim();
   if (!raw) return null;
   return { structName: raw, struct: resolveType(raw, typeDict) };
+}
+
+/**
+ * Strategy 3b — prior assignment tracing (HIGH/MEDIUM)
+ * Arg is a bare identifier. Scan prior statements for `argName = <rhs>` and
+ * apply address-of or cast resolution on the RHS.
+ *   msgData = &ownship;          → address-of → HIGH
+ *   msgData = (NavMsg *)buf;     → cast       → MEDIUM
+ */
+function tryAssignment(
+  argNode: Parser.SyntaxNode,
+  statements: Parser.SyntaxNode[],
+  typeDict: TypeDict,
+): { structName: string; struct: CStruct | null; confidence: PayloadConfidence; strategy: PayloadStrategy } | null {
+  if (argNode.type !== 'identifier') return null;
+  const varName = nodeText(argNode);
+
+  // Walk statements in reverse so we pick up the most-recent assignment
+  for (let i = statements.length - 1; i >= 0; i--) {
+    const stmt = statements[i];
+    // expression_statement → assignment_expression
+    const expr = stmt.type === 'expression_statement' ? stmt.children[0] : null;
+    if (!expr || expr.type !== 'assignment_expression') continue;
+
+    const lhs = expr.childForFieldName('left') ?? expr.children[0];
+    const rhs = expr.childForFieldName('right') ?? expr.children[expr.children.length - 1];
+    if (!lhs || !rhs) continue;
+    if (nodeText(lhs) !== varName) continue;
+
+    // RHS is &var → address-of (HIGH)
+    const addrOf = tryAddressOf(rhs, statements.slice(0, i), typeDict);
+    if (addrOf) return { ...addrOf, confidence: 'high', strategy: 'address-of' };
+
+    // RHS is (Type*)... → cast, possibly wrapping &var (MEDIUM or HIGH)
+    const castResult = tryCast(rhs, statements.slice(0, i), typeDict);
+    if (castResult) {
+      return {
+        ...castResult,
+        confidence: castResult.fromInner ? 'high' : 'medium',
+        strategy: castResult.fromInner ? 'address-of' : 'cast',
+      };
+    }
+  }
+  return null;
 }
 
 /**
@@ -306,10 +359,18 @@ export function resolvePayload(input: PayloadResolverInput): PayloadResolution {
     return { ...base, resolvedStructName: s2.structName, resolvedStruct: s2.struct, confidence: 'high', strategy: 'pointer', notes: '' };
   }
 
-  // Strategy 3: cast
-  const s3 = tryCast(payloadArg, typeDict);
+  // Strategy 3: cast (may recurse into &var inside the cast for higher confidence)
+  const s3 = tryCast(payloadArg, stmts, typeDict);
   if (s3) {
-    return { ...base, resolvedStructName: s3.structName, resolvedStruct: s3.struct, confidence: 'medium', strategy: 'cast', notes: '' };
+    const confidence = s3.fromInner ? 'high' : 'medium';
+    const strategy = s3.fromInner ? 'address-of' : 'cast';
+    return { ...base, resolvedStructName: s3.structName, resolvedStruct: s3.struct, confidence, strategy, notes: '' };
+  }
+
+  // Strategy 3b: prior assignment — msgData = &ownship / msgData = (NavMsg*)buf
+  const s3b = tryAssignment(payloadArg, stmts, typeDict);
+  if (s3b) {
+    return { ...base, resolvedStructName: s3b.structName, resolvedStruct: s3b.struct, confidence: s3b.confidence, strategy: s3b.strategy, notes: 'Resolved via prior assignment' };
   }
 
   // Strategy 4: memcpy

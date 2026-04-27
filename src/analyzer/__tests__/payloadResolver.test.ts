@@ -150,6 +150,15 @@ function makeInput(
   };
 }
 
+function assignStmt(lhsName: string, rhs: MockNode): MockNode {
+  const lhs = ident(lhsName);
+  const assign = mockNode('assignment_expression', `${lhsName} = ${rhs.text}`, [lhs, rhs], {
+    left: lhs,
+    right: rhs,
+  });
+  return mockNode('expression_statement', `${lhsName} = ${rhs.text};`, [assign]);
+}
+
 // ── Tests: Strategy 1 — address-of ───────────────────────────────────────────
 
 describe('payloadResolver — Strategy 1: address-of', () => {
@@ -278,5 +287,60 @@ describe('payloadResolver — edge cases', () => {
     expect(result.sendSiteFile).toBe('sender.c');
     expect(result.sendSiteLine).toBe(43); // row 42 → line 43 (1-based)
     expect(result.patternName).toBe('ipc_send');
+  });
+});
+
+// ── Tests: Strategy 3b — prior assignment tracing ────────────────────────────
+
+describe('payloadResolver — Strategy 3b: prior assignment', () => {
+  it('resolves msgData = &ownship to OwnshipMsg (high confidence)', () => {
+    const ownshipStruct = makeStruct('OwnshipMsg');
+    const td = makeTypeDict([ownshipStruct]);
+
+    // OwnshipMsg ownship;
+    // msgData = &ownship;
+    // send_message(handle, msgID, msgSize, msgData);
+    const varDecl = declNode('OwnshipMsg', 'ownship');
+    const assignment = assignStmt('msgData', addressOf(ident('ownship')));
+    const callNode = buildCallNode([ident('handle'), ident('msgID'), ident('msgSize'), ident('msgData')]);
+    buildFnDef([], [varDecl, assignment], callNode);
+
+    const result = resolvePayload(makeInput(callNode, 3, td));
+    expect(result.strategy).toBe('address-of');
+    expect(result.confidence).toBe('high');
+    expect(result.resolvedStructName).toBe('OwnshipMsg');
+    expect(result.resolvedStruct).toBe(ownshipStruct);
+  });
+
+  it('resolves msgData = (NavMsg *)buf to NavMsg (medium confidence)', () => {
+    const navStruct = makeStruct('NavMsg');
+    const td = makeTypeDict([navStruct]);
+
+    const assignment = assignStmt('msgData', castExpr('NavMsg *', ident('buf')));
+    const callNode = buildCallNode([ident('handle'), ident('id'), ident('size'), ident('msgData')]);
+    buildFnDef([], [assignment], callNode);
+
+    const result = resolvePayload(makeInput(callNode, 3, td));
+    expect(result.strategy).toBe('cast');
+    expect(result.confidence).toBe('medium');
+    expect(result.resolvedStructName).toBe('NavMsg');
+  });
+
+  it('picks the most recent assignment when multiple exist', () => {
+    const navStruct = makeStruct('NavMsg');
+    const radarStruct = makeStruct('RadarMsg');
+    const td = makeTypeDict([navStruct, radarStruct]);
+
+    const decl1 = declNode('NavMsg', 'nav');
+    const decl2 = declNode('RadarMsg', 'radar');
+    // First assignment: msgData = &nav
+    // Second (more recent): msgData = &radar — should win
+    const assign1 = assignStmt('msgData', addressOf(ident('nav')));
+    const assign2 = assignStmt('msgData', addressOf(ident('radar')));
+    const callNode = buildCallNode([ident('h'), ident('id'), ident('sz'), ident('msgData')]);
+    buildFnDef([], [decl1, decl2, assign1, assign2], callNode);
+
+    const result = resolvePayload(makeInput(callNode, 3, td));
+    expect(result.resolvedStructName).toBe('RadarMsg');
   });
 });
