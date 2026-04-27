@@ -342,6 +342,11 @@ export default function App() {
     setMsgStructPatterns(msgStructRegistry.getAll());
   }
 
+  function handleClearAllMsgStructPatterns() {
+    msgStructRegistry.clear();
+    setMsgStructPatterns([]);
+  }
+
   function handleImportMsgStructPatterns(imported: MsgStructPattern[]) {
     msgStructRegistry.importPatterns(imported);
     setMsgStructPatterns(msgStructRegistry.getAll());
@@ -660,6 +665,7 @@ export default function App() {
             msgStructPatterns={msgStructPatterns}
             onAddMsgStructPattern={handleAddMsgStructPattern}
             onRemoveMsgStructPattern={handleRemoveMsgStructPattern}
+            onClearAllMsgStructPatterns={handleClearAllMsgStructPatterns}
             onImportMsgStructPatterns={handleImportMsgStructPatterns}
             onExportMsgStructPatterns={handleExportMsgStructPatterns}
             onExportConfig={handleExportConfig}
@@ -794,6 +800,7 @@ export default function App() {
                   patterns={msgStructPatterns}
                   onAdd={handleAddMsgStructPattern}
                   onRemove={handleRemoveMsgStructPattern}
+                  onClearAll={handleClearAllMsgStructPatterns}
                   onImport={handleImportMsgStructPatterns}
                   onExport={handleExportMsgStructPatterns}
                   onReanalyze={handleReanalyze}
@@ -1009,6 +1016,7 @@ interface DrillDownViewProps {
   msgStructPatterns: MsgStructPattern[];
   onAddMsgStructPattern: (p: Omit<MsgStructPattern, 'id'>) => void;
   onRemoveMsgStructPattern: (id: string) => void;
+  onClearAllMsgStructPatterns: () => void;
   onImportMsgStructPatterns: (imported: MsgStructPattern[]) => void;
   onExportMsgStructPatterns: () => void;
   onExportConfig: () => void;
@@ -1042,6 +1050,7 @@ function DrillDownView({
   msgStructPatterns,
   onAddMsgStructPattern,
   onRemoveMsgStructPattern,
+  onClearAllMsgStructPatterns,
   onImportMsgStructPatterns,
   onExportMsgStructPatterns,
   onExportConfig,
@@ -1130,6 +1139,7 @@ function DrillDownView({
                 patterns={msgStructPatterns}
                 onAdd={onAddMsgStructPattern}
                 onRemove={onRemoveMsgStructPattern}
+                onClearAll={onClearAllMsgStructPatterns}
                 onImport={onImportMsgStructPatterns}
                 onExport={onExportMsgStructPatterns}
                 onReanalyze={onReanalyze}

@@ -6,6 +6,7 @@ interface MsgStructPatternsProps {
   patterns: MsgStructPattern[];
   onAdd: (pattern: Omit<MsgStructPattern, 'id'>) => void;
   onRemove: (id: string) => void;
+  onClearAll: () => void;
   onImport: (patterns: MsgStructPattern[]) => void;
   onExport: () => void;
   onReanalyze: () => void;
@@ -23,6 +24,7 @@ export default function MsgStructPatterns({
   patterns,
   onAdd,
   onRemove,
+  onClearAll,
   onImport,
   onExport,
   onReanalyze,
@@ -118,6 +120,13 @@ export default function MsgStructPatterns({
             disabled={patterns.length === 0}
           >
             ↓ Export JSON
+          </button>
+          <button
+            className="px-3 py-1.5 text-xs bg-red-900/50 hover:bg-red-800/60 text-red-300 rounded transition-colors disabled:opacity-40"
+            onClick={() => { if (confirm('Delete all message struct patterns?')) onClearAll(); }}
+            disabled={patterns.length === 0}
+          >
+            ✕ Delete All
           </button>
           <button
             className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"

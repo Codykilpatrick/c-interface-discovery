@@ -341,8 +341,11 @@ function exportInterfaceSites(resolutions: PayloadResolution[]) {
   URL.revokeObjectURL(url);
 }
 
+type ConfidenceFilter = 'all' | 'high' | 'medium' | 'low' | 'unresolved';
+
 function InterfaceSitesTab({ resolutions }: { resolutions: PayloadResolution[] }) {
   const [query, setQuery] = useState('');
+  const [confidenceFilter, setConfidenceFilter] = useState<ConfidenceFilter>('all');
 
   if (resolutions.length === 0) {
     return (
@@ -359,13 +362,13 @@ function InterfaceSitesTab({ resolutions }: { resolutions: PayloadResolution[] }
   }
 
   const q = query.trim().toLowerCase();
-  const filtered = q
-    ? resolutions.filter(
-        (r) => r.sendSiteFile.toLowerCase().includes(q) ||
-               r.patternName.toLowerCase().includes(q) ||
-               (r.resolvedStructName ?? '').toLowerCase().includes(q)
-      )
-    : resolutions;
+  const filtered = resolutions.filter((r) => {
+    if (confidenceFilter !== 'all' && r.confidence !== confidenceFilter) return false;
+    if (!q) return true;
+    return r.sendSiteFile.toLowerCase().includes(q) ||
+           r.patternName.toLowerCase().includes(q) ||
+           (r.resolvedStructName ?? '').toLowerCase().includes(q);
+  });
 
   const byFile = new Map<string, PayloadResolution[]>();
   for (const r of filtered) {
@@ -384,11 +387,22 @@ function InterfaceSitesTab({ resolutions }: { resolutions: PayloadResolution[] }
     <div className="space-y-3">
       {/* Stats + export bar */}
       <div className="flex items-center gap-4">
-        <div className="flex gap-4 text-xs flex-1">
-          <span className="text-green-400">{stats.high} high</span>
-          <span className="text-yellow-400">{stats.medium} medium</span>
-          <span className="text-orange-400">{stats.low} low</span>
-          <span className="text-red-400">{stats.unresolved} unresolved</span>
+        <div className="flex gap-1 flex-wrap flex-1">
+          {([
+            ['all', 'All', 'text-gray-300', 'bg-gray-600'],
+            ['high', `${stats.high} high`, 'text-green-400', 'bg-green-900/50'],
+            ['medium', `${stats.medium} medium`, 'text-yellow-400', 'bg-yellow-900/50'],
+            ['low', `${stats.low} low`, 'text-orange-400', 'bg-orange-900/50'],
+            ['unresolved', `${stats.unresolved} unresolved`, 'text-red-400', 'bg-red-900/50'],
+          ] as [ConfidenceFilter, string, string, string][]).map(([value, label, textCls, activeCls]) => (
+            <button
+              key={value}
+              onClick={() => setConfidenceFilter(value)}
+              className={`px-2 py-1 text-xs rounded transition-colors ${textCls} ${confidenceFilter === value ? activeCls : 'hover:bg-gray-700/60'}`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <button
           className="shrink-0 px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
