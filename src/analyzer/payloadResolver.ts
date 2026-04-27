@@ -219,25 +219,59 @@ function tryCast(
   const castStruct = resolveType(raw, typeDict);
   if (castStruct) return { structName: raw, struct: castStruct };
 
-  // Cast type is primitive/opaque (char*, void*, etc.) — try to resolve the inner identifier
+  // Cast type is primitive/opaque — try to resolve the inner value's actual type
   if (value && (PRIMITIVE_TYPES.has(raw) || !castStruct)) {
-    const innerIdent = value.type === 'identifier' ? value : null;
-    if (innerIdent) {
-      // Check local var declaration
-      const localType = findLocalVarType(statements, nodeText(innerIdent));
+    // Inner is a bare identifier (e.g. (char*)output → look up output's declared type)
+    if (value.type === 'identifier') {
+      const localType = findLocalVarType(statements, nodeText(value));
       if (localType) {
         const s = resolveType(localType, typeDict);
         if (s) return { structName: localType, struct: s, fromInner: true };
       }
-      // Check function parameter
       if (fnNode) {
-        const paramResult = tryPointerParam(innerIdent, fnNode, typeDict);
+        const paramResult = tryPointerParam(value, fnNode, typeDict);
         if (paramResult?.struct) return { ...paramResult, fromInner: true };
+      }
+    }
+
+    // Inner is a field access (e.g. (SLEMR_MESSAGE_POINTER) pb->somethingsend)
+    // → resolve pb's type → look up field → get field's struct type
+    if (value.type === 'field_expression') {
+      const baseNode = value.childForFieldName('argument') ?? value.children[0];
+      const fieldNode = value.childForFieldName('field') ?? value.children[value.children.length - 1];
+      if (baseNode && fieldNode) {
+        const baseName = nodeText(baseNode).replace(/^[*&]+/, '');
+        const fieldName = nodeText(fieldNode);
+
+        // Find base variable's declared type
+        let baseTypeName = findLocalVarType(statements, baseName);
+        if (!baseTypeName && fnNode) {
+          const fakeNode = baseNode.type === 'identifier' ? baseNode : null;
+          if (fakeNode) {
+            const p = tryPointerParam(fakeNode, fnNode, typeDict);
+            baseTypeName = p?.structName ?? null;
+          }
+        }
+
+        if (baseTypeName) {
+          const baseStruct = resolveType(baseTypeName, typeDict);
+          if (baseStruct) {
+            const field = baseStruct.fields.find((f) => f.name === fieldName);
+            if (field) {
+              const fieldBaseType = field.type
+                .replace(/\b(const|volatile|restrict|struct|union)\b/g, '')
+                .replace(/\*/g, '')
+                .trim();
+              const fieldStruct = resolveType(fieldBaseType, typeDict);
+              if (fieldStruct) return { structName: fieldBaseType, struct: fieldStruct, fromInner: true };
+            }
+          }
+        }
       }
     }
   }
 
-  return { structName: raw, struct: null };
+  return { structName: raw, struct: castStruct };
 }
 
 /**
@@ -402,12 +436,20 @@ export function resolvePayload(input: PayloadResolverInput): PayloadResolution {
     return { ...base, resolvedStructName: s2.structName, resolvedStruct: s2.struct, confidence: 'high', strategy: 'pointer', notes: '' };
   }
 
-  // Strategy 3: cast (may recurse into &var or inner identifier for higher confidence)
+  // Strategy 3: cast (may recurse into &var, inner identifier, or field access)
   const s3 = tryCast(payloadArg, stmts, typeDict, fnNode);
-  if (s3?.struct) {
-    const confidence = s3.fromInner ? 'high' : 'medium';
-    const strategy = s3.fromInner ? 'pointer' : 'cast';
-    return { ...base, resolvedStructName: s3.structName, resolvedStruct: s3.struct, confidence, strategy, notes: '' };
+  if (s3) {
+    if (s3.struct) {
+      const confidence = s3.fromInner ? 'high' : 'medium';
+      const strategy = s3.fromInner ? 'pointer' : 'cast';
+      return { ...base, resolvedStructName: s3.structName, resolvedStruct: s3.struct, confidence, strategy, notes: '' };
+    }
+    if (!PRIMITIVE_TYPES.has(s3.structName)) {
+      // Cast type is a named typedef not in the struct catalog — show it at low confidence
+      // rather than falling through to unresolved (e.g. SLEMR_MESSAGE_POINTER)
+      return { ...base, resolvedStructName: s3.structName, resolvedStruct: null, confidence: 'low', strategy: 'cast', notes: 'Cast type not found in struct catalog' };
+    }
+    // Cast type is a primitive (char*, void*, etc.) — fall through to try other strategies
   }
 
   // Strategy 3b: prior assignment — msgData = &ownship / msgData = (NavMsg*)buf
