@@ -178,6 +178,24 @@ function tryPointerParam(
   return null;
 }
 
+/**
+ * Strategy 2b — local variable declaration (HIGH)
+ * Arg is a bare identifier declared as a pointer in the enclosing function body.
+ * Handles `TYPE *pb = &global;` or `TYPE *pb = (TYPE*) raw;` — the initialiser
+ * is irrelevant; we only need the declared type.
+ */
+function tryLocalVarDecl(
+  argNode: Parser.SyntaxNode,
+  statements: Parser.SyntaxNode[],
+  typeDict: TypeDict,
+): { structName: string; struct: CStruct | null } | null {
+  if (argNode.type !== 'identifier') return null;
+  const varName = nodeText(argNode);
+  const typeName = findLocalVarType(statements, varName);
+  if (!typeName) return null;
+  return { structName: typeName, struct: resolveType(typeName, typeDict) };
+}
+
 /** Primitive/opaque types that are not useful struct names. */
 const PRIMITIVE_TYPES = new Set([
   'char', 'void', 'int', 'short', 'long', 'float', 'double',
@@ -430,10 +448,16 @@ export function resolvePayload(input: PayloadResolverInput): PayloadResolution {
     return { ...base, resolvedStructName: s1.structName, resolvedStruct: s1.struct, confidence: 'high', strategy: 'address-of', notes: '' };
   }
 
-  // Strategy 2: pointer param
+  // Strategy 2: pointer param (function parameter)
   const s2 = tryPointerParam(payloadArg, fnNode, typeDict);
-  if (s2) {
+  if (s2?.struct) {
     return { ...base, resolvedStructName: s2.structName, resolvedStruct: s2.struct, confidence: 'high', strategy: 'pointer', notes: '' };
+  }
+
+  // Strategy 2b: local variable declaration (e.g. TYPE *pb = &global_data_passback)
+  const s2b = tryLocalVarDecl(payloadArg, stmts, typeDict);
+  if (s2b?.struct) {
+    return { ...base, resolvedStructName: s2b.structName, resolvedStruct: s2b.struct, confidence: 'high', strategy: 'pointer', notes: '' };
   }
 
   // Strategy 3: cast (may recurse into &var, inner identifier, or field access)
