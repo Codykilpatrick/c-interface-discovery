@@ -326,6 +326,45 @@ describe('payloadResolver — Strategy 3b: prior assignment', () => {
     expect(result.resolvedStructName).toBe('NavMsg');
   });
 
+  it('resolves static local var declared in outer scope when call is nested', () => {
+    // Mirrors: static ElemProc_PB pbProc; at function top, then
+    // if (...) { register_callback(a, b, c, (SLEMR_PASSBACK) &pbProc); }
+    const pbStruct = makeStruct('ElemProc_PB');
+    const td = makeTypeDict([pbStruct]);
+
+    const pbDecl = { ...declNode('ElemProc_PB', 'pbProc'), startIndex: 10 };
+
+    const castArg = castExpr('SLEMR_PASSBACK', addressOf(ident('pbProc')));
+    const callNode = buildCallNode([ident('a'), ident('b'), ident('c'), castArg]);
+    callNode.startIndex = 200;
+
+    // Inner compound_statement wrapping the call
+    const innerExprStmt = mockNode('expression_statement', '', [callNode], {}, 200, 10);
+    callNode.parent = innerExprStmt;
+    const innerCompound = mockNode('compound_statement', '{}', [innerExprStmt], {}, 100, 5);
+    innerExprStmt.parent = innerCompound;
+
+    // Outer compound_statement: [pbDecl, if_statement containing innerCompound]
+    const ifStmt = mockNode('if_statement', 'if(...){...}', [innerCompound], {}, 50, 3);
+    innerCompound.parent = ifStmt;
+    const outerCompound = mockNode('compound_statement', '{...}', [pbDecl, ifStmt], {}, 0, 0);
+    pbDecl.parent = outerCompound;
+    ifStmt.parent = outerCompound;
+
+    // function_definition wrapping outerCompound
+    const paramList = mockNode('parameter_list', '', []);
+    const fnDecl = mockNode('function_declarator', 'fn()', [mockNode('identifier', 'fn'), paramList], { parameters: paramList });
+    const retType = mockNode('primitive_type', 'void');
+    const fnDef = mockNode('function_definition', 'void fn() {...}', [retType, fnDecl, outerCompound], { declarator: fnDecl });
+    outerCompound.parent = fnDef;
+
+    const result = resolvePayload(makeInput(callNode, 3, td));
+    expect(result.strategy).toBe('pointer');
+    expect(result.confidence).toBe('high');
+    expect(result.resolvedStructName).toBe('ElemProc_PB');
+    expect(result.resolvedStruct).toBe(pbStruct);
+  });
+
   it('picks the most recent assignment when multiple exist', () => {
     const navStruct = makeStruct('NavMsg');
     const radarStruct = makeStruct('RadarMsg');

@@ -43,18 +43,27 @@ function enclosingFunction(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
   return cur?.type === 'function_definition' ? cur : null;
 }
 
-/** Walk sibling statements *before* the given call node within the enclosing compound_statement. */
+/** Walk sibling statements *before* the given call node, including all enclosing scopes up to the function body. */
 function priorSiblings(callNode: Parser.SyntaxNode): Parser.SyntaxNode[] {
-  let compound: Parser.SyntaxNode | null = callNode.parent;
-  while (compound && compound.type !== 'compound_statement' && compound.type !== 'function_definition') {
-    compound = compound.parent;
-  }
-  if (!compound) return [];
   const siblings: Parser.SyntaxNode[] = [];
-  for (const child of compound.children) {
-    if (child.startIndex >= callNode.startIndex) break;
-    siblings.push(child);
+  let current: Parser.SyntaxNode | null = callNode;
+
+  while (current) {
+    let compound: Parser.SyntaxNode | null = current.parent;
+    while (compound && compound.type !== 'compound_statement' && compound.type !== 'function_definition') {
+      compound = compound.parent;
+    }
+    if (!compound) break;
+
+    for (const child of compound.children) {
+      if (child.startIndex >= current.startIndex) break;
+      siblings.push(child);
+    }
+
+    if (compound.type === 'function_definition') break;
+    current = compound;
   }
+
   return siblings;
 }
 
