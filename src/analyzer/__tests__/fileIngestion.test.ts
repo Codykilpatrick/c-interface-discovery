@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { describe, it, expect } from 'vitest';
 import { ingestFile } from '../fileIngestion';
 
@@ -64,5 +65,27 @@ describe('fileIngestion', () => {
     const file = new File(['int x;'], 'types.h');
     const result = await ingestFile(file, 'external');
     expect(result.zone).toBe('external');
+  });
+
+  it('keeps webkitRelativePath as filename', async () => {
+    const file = new File(['int x;'], 'types.h');
+    Object.defineProperty(file, 'webkitRelativePath', { value: 'sa/common/types.h' });
+    const result = await ingestFile(file, 'external');
+    expect(result.filename).toBe('sa/common/types.h');
+  });
+
+  it('accepts UTF-8 headers that use em dashes in comments', async () => {
+    const text = readFileSync('test-fixtures/synthetic-wcs/wcs_types.h');
+    const file = new File([text], 'wcs_types.h');
+    const result = await ingestFile(file, 'string');
+    expect(result.rejected).toBe(false);
+    expect(result.encoding).toBe('utf-8');
+    expect(result.content).toContain('MSG_TYPE_COMMAND');
+  });
+
+  it('falls back to file.name when webkitRelativePath is empty', async () => {
+    const file = new File(['int x;'], 'types.h');
+    const result = await ingestFile(file, 'string');
+    expect(result.filename).toBe('types.h');
   });
 });

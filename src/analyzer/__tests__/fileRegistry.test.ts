@@ -57,6 +57,16 @@ describe('FileRegistry', () => {
     expect(sources[0].filename).toBe('main.c');
   });
 
+  it('allows the same basename in different directories', () => {
+    registry.addFiles([
+      makeFile('sa/types.h', 'external', 'sa'),
+      makeFile('common/types.h', 'external', 'common'),
+    ]);
+    const all = registry.getAll();
+    expect(all).toHaveLength(2);
+    expect(registry.warnings.filter((w) => w.kind === 'collision')).toHaveLength(0);
+  });
+
   it('replaces file silently when same filename added twice in same zone', () => {
     registry.addFiles([makeFile('main.c', 'string', 'v1')]);
     registry.addFiles([makeFile('main.c', 'string', 'v2')]);

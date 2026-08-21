@@ -6,6 +6,7 @@ import { analyzeSource } from './sourceAnalyzer';
 import { extractMessageInterfaces } from './messagingExtractor';
 import { buildStructCatalog } from './structLayoutEngine';
 import type { LayoutOptions } from './structLayoutEngine';
+import { buildHeaderGenBundle } from './headerGenBundle';
 
 let _parser: Parser | null = null;
 
@@ -85,6 +86,14 @@ export async function analyzeString(
   // Collect all payload resolutions from all source files
   const payloadResolutions = fileAnalyses.flatMap((fa) => fa.payloadResolutions ?? []);
 
+  const headerGenBundle = buildHeaderGenBundle({
+    messageInterfaces,
+    payloadResolutions,
+    typeDict,
+    files: registry.getAll(),
+    analyses: fileAnalyses,
+  });
+
   return {
     files: fileAnalyses,
     typeDict,
@@ -95,6 +104,7 @@ export async function analyzeString(
     structCatalog,
     layoutTarget: layoutOpts.target,
     payloadResolutions: payloadResolutions.length > 0 ? payloadResolutions : undefined,
+    headerGenBundle,
   };
 }
 

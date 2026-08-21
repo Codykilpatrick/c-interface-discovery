@@ -172,6 +172,26 @@ export interface TypeDict {
   typedefAliases?: Record<string, string>;
 }
 
+export interface HeaderGenType {
+  name: string;
+  file: string;
+  reachedFrom: string[];
+}
+
+export interface HeaderGenReview {
+  kind: 'unresolved-type' | 'unresolved-include' | 'ambiguous-include' | 'source-root';
+  message: string;
+}
+
+export interface HeaderGenBundle {
+  root: string[];
+  input: string[];
+  include: string[];
+  includeDirs: string[];
+  types: HeaderGenType[];
+  review: HeaderGenReview[];
+}
+
 export interface StringAnalysis {
   files: FileAnalysis[];         // one per .c source file only
   typeDict: TypeDict;            // resolved from all headers + sources
@@ -182,6 +202,7 @@ export interface StringAnalysis {
   structCatalog?: import('./structLayoutEngine').StructCatalog;
   layoutTarget?: '32bit' | '64bit';
   payloadResolutions?: import('./payloadResolver').PayloadResolution[];
+  headerGenBundle?: HeaderGenBundle;
 }
 
 export interface AnalysisWarning {

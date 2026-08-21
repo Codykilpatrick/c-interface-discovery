@@ -11,6 +11,7 @@ import type {
   CustomPattern,
   FileAnalysis,
   FileRegistryEntry,
+  HeaderGenBundle,
   LoadedFile,
   MsgStructPattern,
   StringAnalysis,
@@ -514,6 +515,14 @@ export default function App() {
     downloadBlob(lines.join('\n'), 'text/plain', `cid-${appName.toLowerCase().replace(/\s+/g, '-')}.txt`);
   }
 
+  function handleExportHeaderGen(analysis: StringAnalysis, appName: string) {
+    const bundle = analysis.headerGenBundle ?? {
+      root: [], input: [], include: [], includeDirs: [], types: [], review: [],
+    };
+    const json = JSON.stringify({ process: appName, ...bundle }, null, 2);
+    downloadBlob(json, 'application/json', `cid-${appName.toLowerCase().replace(/\s+/g, '-')}-header-gen.json`);
+  }
+
   function downloadBlob(content: string, type: string, filename: string) {
     const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
@@ -610,6 +619,12 @@ export default function App() {
               </button>
               <button
                 className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                onClick={() => handleExportHeaderGen(selectedAnalysis, selectedApp!.name)}
+              >
+                ↓ Export header-gen
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
                 onClick={handleExportPatterns}
               >
                 ↓ Export Patterns
@@ -673,6 +688,7 @@ export default function App() {
             onDetectMsgStructs={handleDetectMsgStructs}
             msgStructPrefill={msgStructPrefill}
             msgStructMatchCounts={msgStructMatchCounts}
+            onExportHeaderGen={() => { if (selectedAnalysis) handleExportHeaderGen(selectedAnalysis, selectedApp.name); }}
             onBack={(wasFullscreen) => {
               setAutoFullscreenAppGraph(wasFullscreen);
               setSelectedAppId(null);
@@ -768,6 +784,26 @@ export default function App() {
                     window.scrollTo({ top: 0, behavior: 'instant' });
                   }}
                 />
+              </div>
+            )}
+
+            {applications.some((a) => a.analysis?.headerGenBundle) && (
+              <div className="mb-6 space-y-3">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+                  header-gen files
+                </h2>
+                {applications.map((app) => {
+                  const bundle = app.analysis?.headerGenBundle;
+                  if (!bundle) return null;
+                  return (
+                    <HeaderGenBundlePanel
+                      key={app.id}
+                      process={app.name}
+                      bundle={bundle}
+                      onExport={() => handleExportHeaderGen(app.analysis!, app.name)}
+                    />
+                  );
+                })}
               </div>
             )}
 
@@ -1024,6 +1060,7 @@ interface DrillDownViewProps {
   onDetectMsgStructs: () => number;
   msgStructPrefill: string | undefined;
   msgStructMatchCounts: Map<string, number>;
+  onExportHeaderGen: () => void;
   onBack: (wasFullscreen: boolean) => void;
 }
 
@@ -1058,6 +1095,7 @@ function DrillDownView({
   onDetectMsgStructs,
   msgStructPrefill,
   msgStructMatchCounts,
+  onExportHeaderGen,
   onBack,
 }: DrillDownViewProps) {
   const allWarnings = analysis?.warnings ?? [];
@@ -1078,6 +1116,9 @@ function DrillDownView({
         <>
           <WarningBanner warnings={allWarnings} />
           <SummaryBar analysis={analysis} />
+          {analysis.headerGenBundle && (
+            <HeaderGenBundlePanel process={app.name} bundle={analysis.headerGenBundle} onExport={onExportHeaderGen} />
+          )}
 
           {/* Graph */}
           <div className="mb-6">
@@ -1152,5 +1193,75 @@ function DrillDownView({
         </>
       )}
     </>
+  );
+}
+
+function PathList({ paths }: { paths: string[] }) {
+  if (paths.length === 0) return <div className="text-xs text-gray-600 italic">None</div>;
+  return (
+    <ul className="font-mono text-xs text-gray-300 space-y-0.5">
+      {paths.map((p) => <li key={p} className="truncate" title={p}>{p}</li>)}
+    </ul>
+  );
+}
+
+function HeaderGenBundlePanel({
+  process,
+  bundle,
+  onExport,
+}: {
+  process?: string;
+  bundle: HeaderGenBundle;
+  onExport: () => void;
+}) {
+  const empty = bundle.root.length === 0 && bundle.input.length === 0;
+  return (
+    <div className="mb-6 border border-gray-800 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+          {process ? `${process} — header-gen files` : 'header-gen files'}
+        </h2>
+        <button
+          className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+          onClick={onExport}
+        >
+          ↓ Export JSON
+        </button>
+      </div>
+      {empty ? (
+        <div className="text-xs text-gray-500 space-y-1">
+          <div>
+            No roots yet. The <span className="font-mono">.c</span> files are loaded, but the
+            headers they <span className="font-mono">#include</span> are not.
+          </div>
+          <div>
+            Ingest the process directory (or drop the <span className="font-mono">.h</span> files)
+            into this application zone — not External Includes.
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <div className="text-xs text-gray-500 mb-1">Roots — start here, resolve downward ({bundle.root.length})</div>
+            <PathList paths={bundle.root} />
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 mb-1">Input ({bundle.input.length})</div>
+            <PathList paths={bundle.input} />
+          </div>
+          <div>
+            <div className="text-xs text-gray-500 mb-1">Include ({bundle.include.length})</div>
+            <PathList paths={bundle.include} />
+          </div>
+        </div>
+      )}
+      {bundle.review.length > 0 && (
+        <div className="mt-3 text-xs text-yellow-600 space-y-0.5">
+          {bundle.review.map((r, i) => (
+            <div key={`${r.kind}:${r.message}:${i}`}>[{r.kind}] {r.message}</div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

@@ -21,9 +21,15 @@ function normalizeLineEndings(text: string): string {
   return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
+/** Directory ingest sets webkitRelativePath (e.g. sa/types.h); file picker only has name. */
+export function ingestPath(file: File): string {
+  const rel = file.webkitRelativePath?.replace(/\\/g, '/') ?? '';
+  return rel || file.name;
+}
+
 export async function ingestFile(file: File, zone: FileZone): Promise<LoadedFile> {
   const base: Omit<LoadedFile, 'content' | 'encoding' | 'rejected' | 'rejectionReason' | 'oversized'> = {
-    filename: file.name,
+    filename: ingestPath(file),
     zone,
     sizeBytes: file.size,
   };
@@ -41,18 +47,22 @@ export async function ingestFile(file: File, zone: FileZone): Promise<LoadedFile
   const buffer = await file.arrayBuffer();
   const bytes = new Uint8Array(buffer);
 
-  // Binary detection
-  if (isBinary(bytes)) {
+  // NUL in the sample means a real binary (e.g. UTF-16). UTF-8 punctuation
+  // like em dashes is not binary — it decodes cleanly below.
+  const sample = bytes.slice(0, BINARY_SAMPLE_SIZE);
+  if (sample.includes(0)) {
     return { ...base, content: '', encoding: 'utf-8', oversized: false, rejected: true, rejectionReason: 'binary file' };
   }
 
-  // Encoding detection
   let content: string;
   let encoding: 'utf-8' | 'latin-1';
   try {
     content = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
     encoding = 'utf-8';
   } catch {
+    if (isBinary(bytes)) {
+      return { ...base, content: '', encoding: 'utf-8', oversized: false, rejected: true, rejectionReason: 'binary file' };
+    }
     content = new TextDecoder('iso-8859-1').decode(buffer);
     encoding = 'latin-1';
   }
