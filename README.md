@@ -53,24 +53,24 @@ npm run build     # production build → dist/
 
 ```bash
 # On an internet-connected machine:
-docker build -t c-interface-discovery:2.0.0 .
-docker save c-interface-discovery:2.0.0 | gzip > cid-v2.0.0.tar.gz
-# Transfer cid-v2.0.0.tar.gz via approved removable media
+docker build -t c-interface-discovery:2.1.0 .
+docker save c-interface-discovery:2.1.0 | gzip > cid-v2.1.0.tar.gz
+# Transfer cid-v2.1.0.tar.gz via approved removable media
 ```
 
 ### Load and run on airgapped machine
 
 ```bash
-docker load < cid-v2.0.0.tar.gz
+docker load < cid-v2.1.0.tar.gz
 
 # Production mode (pre-built app):
-docker run -d -p 8080:80 --name cid c-interface-discovery:2.0.0
+docker run -d -p 8080:80 --name cid c-interface-discovery:2.1.0
 # Access at: http://<host-ip>:8080
 
 # Dev mode with source mounted (edit and rebuild without retransfer):
 docker run -d -p 3000:3000 \
   -v /path/to/cid-source:/app \
-  --name cid-dev c-interface-discovery:2.0.0 \
+  --name cid-dev c-interface-discovery:2.1.0 \
   sh -c "cd /app && npm run dev -- --host 0.0.0.0 --port 3000"
 # Access at: http://<host-ip>:3000
 ```
@@ -111,15 +111,30 @@ exit
 
 ## Test fixtures
 
-`test-fixtures/` contains three synthetic applications for end-to-end testing of the multi-app flow:
+`test-fixtures/` has three small apps for the original multi-app flow, plus a larger combat-system suite.
 
 | Directory | Description |
 |---|---|
-| `synthetic-string/` | Acoustic sensor array — produces `MSG_TYPE_SOLUTION`, consumes `MSG_TYPE_COMMAND` |
+| `synthetic-array/` | Acoustic sensor array — produces `MSG_TYPE_SOLUTION`, consumes `MSG_TYPE_COMMAND` |
 | `synthetic-wcs/` | Weapons Control System — consumes `MSG_TYPE_SOLUTION`, produces `MSG_TYPE_COMMAND` |
-| `synthetic-broker/` | Message broker — receives from publishers, routes to subscribers; detected automatically as a transit app |
+| `synthetic-broker/` | Message broker — transit app for those two message types |
+| `synthetic-titan/` | Custom `titan_send_message` / `titan_recv_message` bus (needs `cid-config.json`) |
+| `synthetic-cic/` | Four-app combat system with 6-layer nested payloads, a fake `usr/include`, mixed IPC, and a transit CIC |
 
-Loading all three demonstrates transit-app detection: the broker routes both message types, and the graph shows sensor array → broker → WCS and WCS → broker → sensor array with no false direct connections.
+The original three: load array + WCS + broker. The graph should show sensor array → broker → WCS and the reverse, with no direct array–WCS edge.
+
+`synthetic-cic/` is the stress fixture. Import `test-fixtures/cid-config.json` first, drop `synthetic-cic/common/` and `synthetic-cic/usr/include/` into External Includes, then one folder per application:
+
+| App name | Folder | Role |
+|---|---|---|
+| Sonar | `synthetic-cic/sonar/` | Produces `MSG_TYPE_CONTACT` and `MSG_TYPE_TRACK` |
+| Nav | `synthetic-cic/nav/` | Produces `MSG_TYPE_OWN_SHIP` |
+| CIC | `synthetic-cic/cic/` | Transit for `MSG_TYPE_TRACK`; consumes contact / own-ship / engage |
+| Fire Control | `synthetic-cic/firecontrol/` | Consumes `MSG_TYPE_TRACK`, produces `MSG_TYPE_ENGAGE` and unmatched `MSG_TYPE_WEAPON_ORD` |
+
+Expected graph: Sonar → CIC → Fire Control for tracks, Sonar → CIC for contacts, Nav → CIC for own-ship, Fire Control → CIC for engage.
+
+Contact payloads nest six app structs (`ContactMsg` → `FusedContact` → `TrackKinematics` → `MotionState` → `DepthFix` → `GeoCoord` → `CicTime`) and then system types from the fake include tree (`timeval` / `__time_t` in `sys/time.h` and `bits/types.h`, `sockaddr_in` / `in_addr` in `netinet/in.h`).
 
 ## Known limitations
 

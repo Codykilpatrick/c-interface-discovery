@@ -517,7 +517,7 @@ export default function App() {
 
   function handleExportHeaderGen(analysis: StringAnalysis, appName: string) {
     const bundle = analysis.headerGenBundle ?? {
-      root: [], input: [], include: [], includeDirs: [], types: [], review: [],
+      root: [], input: [], inputDirs: [], include: [], includeDirs: [], types: [], review: [],
     };
     const json = JSON.stringify({ process: appName, ...bundle }, null, 2);
     downloadBlob(json, 'application/json', `cid-${appName.toLowerCase().replace(/\s+/g, '-')}-header-gen.json`);

@@ -186,6 +186,8 @@ export interface HeaderGenReview {
 export interface HeaderGenBundle {
   root: string[];
   input: string[];
+  /** Parent directories of `input` — pass these as header-gen `--input` (it walks each tree). */
+  inputDirs: string[];
   include: string[];
   includeDirs: string[];
   types: HeaderGenType[];

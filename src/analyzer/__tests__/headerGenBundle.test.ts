@@ -113,6 +113,7 @@ describe('buildHeaderGenBundle', () => {
 
     expect(bundle.root).toEqual(['sa/acoustic_msg.h', 'sa/command_msg.h']);
     expect(bundle.input).toEqual(['common/sensor_types.h', 'sa/acoustic_msg.h', 'sa/command_msg.h']);
+    expect(bundle.inputDirs).toEqual(['common', 'sa']);
     expect(bundle.include).toEqual(['shared/legacy_macros.h']);
     expect(bundle.includeDirs).toEqual(['common', 'sa', 'shared']);
     expect(bundle.input).not.toContain('unused/dead.h');

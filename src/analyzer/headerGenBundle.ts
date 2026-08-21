@@ -37,6 +37,15 @@ export function dirOf(path: string): string {
   return i === -1 ? '' : path.slice(0, i);
 }
 
+function dirsOf(paths: string[]): string[] {
+  const set = new Set<string>();
+  for (const f of paths) {
+    const d = dirOf(f);
+    if (d) set.add(d);
+  }
+  return [...set].sort();
+}
+
 function joinPath(dir: string, rel: string): string {
   const parts = [...dir.split('/'), ...rel.replace(/\\/g, '/').split('/')];
   const out: string[] = [];
@@ -283,11 +292,8 @@ export function buildHeaderGenBundle(input: HeaderGenBundleInput): HeaderGenBund
     });
   }
 
-  const dirSet = new Set<string>();
-  for (const f of [...inputFiles, ...includeFiles]) {
-    const d = dirOf(f);
-    if (d) dirSet.add(d);
-  }
+  const inputDirs = dirsOf(inputFiles);
+  const dirSet = new Set<string>([...inputDirs, ...dirsOf(includeFiles)]);
 
   const types: HeaderGenType[] = [...typeFile.entries()]
     .map(([name, file]) => ({
@@ -308,6 +314,7 @@ export function buildHeaderGenBundle(input: HeaderGenBundleInput): HeaderGenBund
   return {
     root: rootFiles,
     input: inputFiles,
+    inputDirs,
     include: includeFiles,
     includeDirs: [...dirSet].sort(),
     types,

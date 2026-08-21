@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_comment": "Import this config before loading any synthetic test fixtures. The standard fixtures (synthetic-array, synthetic-wcs, synthetic-broker) use MSG_TYPE_* constants and standard IPC calls that resolve automatically with no config. The synthetic-titan fixture uses a custom IPC bus with non-standard TITAN_MSG_* constants that require the patterns below.",
+  "_comment": "Import this config before loading fixtures that use custom buses. synthetic-array / synthetic-wcs / synthetic-broker work with no config. synthetic-titan needs titan_*. synthetic-cic needs cic_bus_* and link11_write.",
   "customPatterns": [
     {
       "id": "titan-send",
@@ -8,7 +8,7 @@
       "pattern": "titan_send_message\\s*\\(",
       "ipcType": "custom",
       "direction": "send",
-      "notes": "TITAN bus send path. Arg 2 is a TITAN_MSG_* constant (Strategy A); arg 4 is a typed data pointer — infer struct from the enclosing wrapper function parameter (Strategy B).",
+      "notes": "TITAN bus send. Arg 2 is a TITAN_MSG_* constant; arg 4 is the typed payload.",
       "isExternal": false
     },
     {
@@ -17,7 +17,52 @@
       "pattern": "titan_recv_message\\s*\\(",
       "ipcType": "custom",
       "direction": "recv",
-      "notes": "TITAN bus receive path. Arg 4 is the typed output buffer; Strategy B infers the struct from the wrapper function's parameter type.",
+      "notes": "TITAN bus receive. Arg 4 is the typed output buffer.",
+      "isExternal": false
+    },
+    {
+      "id": "cic-bus-send",
+      "name": "cic_bus_send",
+      "pattern": "cic_bus_send\\s*\\(",
+      "ipcType": "custom",
+      "direction": "send",
+      "msgArgIndex": 1,
+      "lengthArgIndex": 2,
+      "payloadArgIndex": 3,
+      "notes": "CIC bus send. Arg 1 is MSG_TYPE_* / CIC_BUS_*; arg 3 is the payload pointer.",
+      "isExternal": false
+    },
+    {
+      "id": "cic-bus-recv",
+      "name": "cic_bus_recv",
+      "pattern": "cic_bus_recv\\s*\\(",
+      "ipcType": "custom",
+      "direction": "recv",
+      "payloadArgIndex": 3,
+      "notes": "CIC bus receive. Arg 3 is the typed output buffer.",
+      "isExternal": false
+    },
+    {
+      "id": "cic-bus-register",
+      "name": "cic_bus_register",
+      "pattern": "cic_bus_register\\s*\\(",
+      "ipcType": "custom",
+      "direction": "recv",
+      "msgArgIndex": 1,
+      "callbackArgIndex": 2,
+      "notes": "CIC bus callback registration. Arg 2 is the handler; payload type comes from the handler's data parameter.",
+      "isExternal": false
+    },
+    {
+      "id": "link11-write",
+      "name": "link11_write",
+      "pattern": "link11_write\\s*\\(",
+      "ipcType": "custom",
+      "direction": "send",
+      "msgArgIndex": 1,
+      "payloadArgIndex": 2,
+      "lengthArgIndex": 3,
+      "notes": "Link-11 egress. Arg 1 is PKT_TYPE_LINK_REPORT.",
       "isExternal": false
     }
   ],
@@ -46,6 +91,31 @@
       "id": "broker-routing-envelope",
       "name": "RoutingMsg",
       "pattern": "^RoutingMsg$"
+    },
+    {
+      "id": "cic-contact",
+      "name": "ContactMsg",
+      "pattern": "^ContactMsg$"
+    },
+    {
+      "id": "cic-track",
+      "name": "TrackMsg",
+      "pattern": "^TrackMsg$"
+    },
+    {
+      "id": "cic-fused-contact",
+      "name": "FusedContact",
+      "pattern": "^FusedContact$"
+    },
+    {
+      "id": "sys-timeval",
+      "name": "timeval",
+      "pattern": "^timeval$"
+    },
+    {
+      "id": "sys-sockaddr-in",
+      "name": "sockaddr_in",
+      "pattern": "^sockaddr_in$"
     }
   ]
 }
