@@ -5,16 +5,18 @@ set -euo pipefail
 #
 # Optional environment overrides:
 #   PLATFORM   default linux/amd64  (e.g. linux/arm64 for ARM Linux hosts)
-#   IMAGE      default c-interface-discovery:latest
-#   OUTPUT     default <repo>/c-interface-discovery-<platform>.tar
+#   VERSION    default version from package.json
+#   IMAGE      default c-interface-discovery:<VERSION>
+#   OUTPUT     default <repo>/c-interface-discovery-<VERSION>-<platform>.tar
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PLATFORM="${PLATFORM:-linux/amd64}"
-IMAGE="${IMAGE:-c-interface-discovery:latest}"
+VERSION="${VERSION:-$(node -p "require('./package.json').version")}"
+IMAGE="${IMAGE:-c-interface-discovery:${VERSION}}"
 PLATFORM_FILE="${PLATFORM//\//-}"
-OUTPUT="${OUTPUT:-$ROOT/c-interface-discovery-${PLATFORM_FILE}.tar}"
+OUTPUT="${OUTPUT:-$ROOT/c-interface-discovery-${VERSION}-${PLATFORM_FILE}.tar}"
 
 echo "Building $IMAGE for $PLATFORM ..."
 docker build --platform "$PLATFORM" -t "$IMAGE" .

@@ -53,24 +53,24 @@ npm run build     # production build → dist/
 
 ```bash
 # On an internet-connected machine:
-docker build -t c-interface-discovery:1.0 .
-docker save c-interface-discovery:1.0 | gzip > cid-v1.0.tar.gz
-# Transfer cid-v1.0.tar.gz via approved removable media
+docker build -t c-interface-discovery:1.1.0 .
+docker save c-interface-discovery:1.1.0 | gzip > cid-v1.1.0.tar.gz
+# Transfer cid-v1.1.0.tar.gz via approved removable media
 ```
 
 ### Load and run on airgapped machine
 
 ```bash
-docker load < cid-v1.0.tar.gz
+docker load < cid-v1.1.0.tar.gz
 
 # Production mode (pre-built app):
-docker run -d -p 8080:80 --name cid c-interface-discovery:1.0
+docker run -d -p 8080:80 --name cid c-interface-discovery:1.1.0
 # Access at: http://<host-ip>:8080
 
 # Dev mode with source mounted (edit and rebuild without retransfer):
 docker run -d -p 3000:3000 \
   -v /path/to/cid-source:/app \
-  --name cid-dev c-interface-discovery:1.0 \
+  --name cid-dev c-interface-discovery:1.1.0 \
   sh -c "cd /app && npm run dev -- --host 0.0.0.0 --port 3000"
 # Access at: http://<host-ip>:3000
 ```
