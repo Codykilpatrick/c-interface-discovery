@@ -136,6 +136,11 @@ Expected graph: Sonar → CIC → Fire Control for tracks, Sonar → CIC for con
 
 Contact payloads nest six app structs (`ContactMsg` → `FusedContact` → `TrackKinematics` → `MotionState` → `DepthFix` → `GeoCoord` → `CicTime`) and then system types from the fake include tree (`timeval` / `__time_t` in `sys/time.h` and `bits/types.h`, `sockaddr_in` / `in_addr` in `netinet/in.h`).
 
+## Design docs
+
+- [`docs/payload-resolution-patterns.md`](docs/payload-resolution-patterns.md) — how the payload resolver infers struct types at send sites
+- [`docs/llm-integration-plan.md`](docs/llm-integration-plan.md) — **proposed** integration for querying analysis output with a self-hosted Gemma/vLLM model (not implemented)
+
 ## Known limitations
 
 - Custom messaging wrappers not detected until manually added to the pattern registry
