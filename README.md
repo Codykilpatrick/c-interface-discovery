@@ -139,7 +139,7 @@ Contact payloads nest six app structs (`ContactMsg` → `FusedContact` → `Trac
 ## Design docs
 
 - [`docs/payload-resolution-patterns.md`](docs/payload-resolution-patterns.md) — how the payload resolver infers struct types at send sites
-- [`docs/llm-integration-plan.md`](docs/llm-integration-plan.md) — **proposed** integration for querying analysis output with a self-hosted Gemma/vLLM model (not implemented)
+- [`docs/llm-integration-plan.md`](docs/llm-integration-plan.md) — **proposed** integration for querying analysis output with a self-hosted Gemma 4 / vLLM model (not implemented)
 
 ## Known limitations
 
