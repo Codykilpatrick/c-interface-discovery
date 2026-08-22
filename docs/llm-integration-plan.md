@@ -347,6 +347,7 @@ deterministic TypeScript with no hallucination surface.
 | `getUnknownCalls(app)` | `FileAnalysis.unknownCalls` |
 | `getCrossAppEdges(constant?)` | `utils/buildAppGraph.ts` |
 | `getHeaderGenReview(app)` | `headerGenBundle.review` |
+| `getMessageComposition(constant, depth)` | derived projection — what a message is composed of (§10) |
 | `getPaddingMap(struct, target)` | `structLayoutEngine` — located padding gaps (§9) |
 | `getLayoutDiff(struct)` | 32-bit vs 64-bit size/offset diff (§9.4) |
 | `getStructRoles(app)` | `structRoleAnalyzer` — wire roots, envelopes, shared blocks (§8) |
@@ -673,7 +674,125 @@ be sequenced first.
 
 ---
 
-## 10. Scope discipline
+## 10. The composition view — what the analyst actually reads
+
+§8 gives roles (bottom-up: what contains this struct?). §9 gives bytes. Neither on its own
+renders the statement an analyst wants, which is top-down and per message:
+
+> *"`MSG_TYPE_CONTACT` is composed of `CicHeader` + `FusedContact` + `sockaddr_in`."*
+
+That is a third render over the same two datasets, and it is the primary user-facing output of
+this whole line of work. Spelling it out so it does not get lost between the two.
+
+### 10.1 Summary render — one line per message
+
+Generated from the fixture, 64-bit target:
+
+```
+MSG_TYPE_CONTACT      → ContactMsg       136B (64) /  108B (32) ⚠ SIZE DIFFERS
+                        = CicHeader  +  pad(4)  +  FusedContact  +  sockaddr_in
+
+MSG_TYPE_OWN_SHIP     → OwnShipMsg        72B (64) /   48B (32) ⚠ SIZE DIFFERS
+                        = CicHeader  +  pad(4)  +  MotionState  +  fix_quality  +  pad(4)
+
+MSG_TYPE_TRACK        → TrackMsg          88B (64) /   64B (32) ⚠ SIZE DIFFERS
+                        = CicHeader  +  track_id  +  TrackKinematics  +  source  +  pad(4)
+
+MSG_TYPE_ENGAGE       → EngageMsg         88B (64) /   68B (32) ⚠ SIZE DIFFERS
+                        = CicHeader  +  track_id  +  weapon_id  +  auth_flags  +  TrackKinematics
+
+MSG_TYPE_WEAPON_ORD   → WeaponOrdMsg      24B (64) /   24B (32)
+                        = CicHeader  +  tube_id  +  track_id  +  weapon_type
+
+PKT_TYPE_LINK_REPORT  → LinkReportPkt     84B (64) /   84B (32)
+                        = CicHeader  +  n_tracks  +  own_ship_seq  +  note
+
+MSG_TYPE_HEARTBEAT    → HeartbeatMsg      16B (64) /   16B (32)
+                        = CicHeader  +  origin
+
+MSG_ID_NAV_FIX        → NavFixMsg         72B (64) /   44B (32) ⚠ SIZE DIFFERS
+                        = CicHeader  +  pad(4)  +  GpsFix  +  quality  +  pad(4)
+```
+
+Reading rules: named blocks are struct members (click through to their own composition), bare
+lowercase names are scalar fields, `pad(n)` is inserted alignment. Every message is one line;
+the whole interface fits on a screen.
+
+**Finding, straight out of the render: 5 of 8 messages change size between targets.** The three
+that don't (`WeaponOrdMsg`, `LinkReportPkt`, `HeartbeatMsg`) are exactly the three whose blocks
+contain no `long` anywhere in their tree. That is a portability audit nobody had to run.
+
+### 10.2 Expanded render — one message, full tree
+
+```
+  ContactMsg                          136B
+  + hdr: CicHeader                     12B @0     ENVELOPE (all 8 messages)
+      + msg_type, length, seq, checksum  9B
+      + <padding>                        3B @9    ← struct tail align
+  + <padding>                           4B @12    ← alignment of FusedContact
+  + body: FusedContact                104B @16    SHARED block (2 parents)
+      + kin: TrackKinematics            64B @16   SHARED block (4 parents)
+          + motion: MotionState         48B @16   SHARED block (2 parents)
+          + vx, vy, snr                 12B
+          + <padding>                    4B @76
+      + sensor_id                        4B
+      + label[32]                       32B
+  + origin: sockaddr_in                16B @120   system type (netinet/in.h)
+```
+
+Each line carries: field name, block type, size, absolute offset, and the §8 role. Padding is
+rendered inline rather than implied by an offset jump — the gap is a first-class row, because
+that is what the question was.
+
+### 10.3 Shape
+
+```ts
+export interface MessageComposition {
+  msgConstant: string;
+  rootStruct: string;
+  sizeByTarget: { '32bit': number; '64bit': number };
+  differsAcrossTargets: boolean;
+  parts: CompositionPart[];   // ordered, offset-sorted, padding included
+}
+
+export interface CompositionPart {
+  kind: 'block' | 'scalar' | 'padding';
+  name: string | null;        // field name; null for padding
+  typeName: string | null;    // struct type, for kind: 'block'
+  offsetBytes: number;
+  sizeBytes: number;
+  role?: StructRole;          // from §8 — ENVELOPE / SHARED block / …
+  children?: CompositionPart[]; // recursive; depth-capped for render
+}
+```
+
+Derived, not stored: `MessageComposition` is a projection over `messageInterfaces` +
+`structRoles` (§8) + `structCatalog` with `PaddingGap[]` (§9). No new parsing, no new source of
+truth — which means it cannot drift from the layout engine.
+
+### 10.4 Why this matters for the model
+
+The one-line summary form is compact enough to go **straight into digest tier 2**. At ~55 tokens
+per message, all 8 fixture messages cost ~440 tokens; 400 messages on a large string cost ~22K,
+still inside budget.
+
+That means the model knows every message's composition and target-portability **without
+spending a tool call** — it only reaches for `getStructLayout` or `getPaddingMap` when a
+question needs exact offsets. It also means answers to *"what is `MSG_TYPE_CONTACT` made of?"*
+come from a fact in context rather than an inference over a struct list.
+
+New tool for the expanded form: `getMessageComposition(constant, depth)`. Added to §5.
+
+### 10.5 Delivery
+
+Same phase as §8–9, as the UI surface for both: a "Message Composition" panel listing the
+summary render, each row expanding to the tree. It is the natural home for the target selector
+that `layoutTarget` already backs, and the obvious place to badge the packing-detection caveat
+from §9.5.
+
+---
+
+## 11. Scope discipline
 
 The README's headline promise is *"Runs 100% in the browser — zero network calls, zero
 backend."* This changes that, and the wording gets updated to "zero internet access; optional
@@ -693,7 +812,7 @@ What must not change:
 
 ---
 
-## 11. Phases
+## 12. Phases
 
 | Phase | Scope | Ships |
 |---|---|---|
@@ -702,7 +821,7 @@ What must not change:
 | **2** | Ask panel: scope selector, streaming answers, cancel, reasoning disclosure, citation chips wired to drill-down | The core feature. Digest-only, no tools. |
 | **3** | `tools.ts` + the split streaming/non-streaming request loop + tool-call trace UI | Deep struct nests and exact line numbers become reliable. |
 | **1.4** | `detectPackAttribute()` real implementation (§9.5) — retain raw declaration span or record pack pragmas in `headerParser` | Prerequisite for trusting any byte offset. |
-| **1.5** | `structRoleAnalyzer.ts` — containment graph, root/envelope/block classification, "Message Composition" UI panel, `structRoles` on `StringAnalysis`; `PaddingGap[]` + 32/64 target diff (§9) | Pure analyzer work, no LLM. Useful on its own; improves the digest and grounds §8–9 questions. |
+| **1.5** | `structRoleAnalyzer.ts` — containment graph, root/envelope/block classification, `structRoles` on `StringAnalysis`; `PaddingGap[]` + 32/64 target diff (§9); `MessageComposition` projection + "Message Composition" UI panel (§10) | Pure analyzer work, no LLM. Useful on its own; improves the digest and grounds §8–9 questions. |
 | **4** | Pattern suggestion with analyzer verification (§7); canned analyses for unresolved structs / unknown directions / `headerGenBundle.review` | The force-multiplier phase. |
 
 Phases 0–2 are independently useful. Phase 3 is what makes it trustworthy on a large codebase.
@@ -710,7 +829,7 @@ Phase 4 is where it saves real analyst hours.
 
 ---
 
-## 12. Testing
+## 13. Testing
 
 - `digest.test.ts` — snapshot the digest for each `synthetic-cic/` app; assert budget is
   respected, ordering is stable, and byte-identical output across runs (the prefix-cache
@@ -725,6 +844,9 @@ Phase 4 is where it saves real analyst hours.
   constants map to 8 wire roots, `CicHeader` classifies as `ENVELOPE` (not a root), `TrackMsg`
   as dual-role, `TrackKinematics` as a shared block (the proximity false-positive), and the
   variable-length arrays in `PictureTable`/`SonarFrame` are flagged.
+- `composition.test.ts` — assert the §10.1 summary for all 8 fixture messages: correct part
+  ordering, `pad(4)` rows present where §9 says, and exactly 5 of 8 flagged
+  `differsAcrossTargets`. Guards the projection against drift from the layout engine.
 - `padding.test.ts` — assert the §9.3 byte map for `ContactMsg` on both targets: the 4-byte
   composition-boundary gap at offset 12 on 64-bit and its absence on 32-bit, `CicHeader`'s 3
   tail bytes, and the full §9.4 size table. `timeval` → `__time_t` → `long` is the mechanism, so
@@ -744,7 +866,7 @@ Phase 4 is where it saves real analyst hours.
 
 ---
 
-## 13. Open questions
+## 14. Open questions
 
 1. **vLLM version on the serving host.** Not currently known, and **not blocking**: non-streaming
    tool turns and `response_format` work on every version, so the design is safe either way. It
