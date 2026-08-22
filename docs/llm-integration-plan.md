@@ -153,25 +153,106 @@ No retries, no console noise, no impact on analysis.
 
 ---
 
-## 4. Grounding: the analysis digest
+## 4. Context management
 
-The model must answer from analyzer output, so that output has to reach the prompt.
+This is the core of the design, so it's worth being precise about it. A real string source is
+far larger than any context window — but the raw source is never what goes into the prompt.
 
-At 256K it is tempting to serialize `StringAnalysis` wholesale. **Don't.** Three reasons:
+### 4.1 The analyzer is already the compression step
 
-1. **Recall degrades with length.** A specific struct offset buried at 180K is materially less
-   likely to be retrieved correctly than the same fact in a 20K prompt. Long-context benchmarks
-   consistently show middle-of-context recall loss. Precision matters more here than coverage —
-   a wrong byte offset in a message spec is worse than "I don't know".
-2. **Shared GPU.** A 200K prefill on every question is slow, and it evicts other analysts'
-   prefix cache blocks. A tight, *stable* digest gets cached and reused across turns.
-3. **It doesn't scale anyway.** A real combat-system string blows past 256K regardless, so the
-   tiering has to exist. Building it in from the start avoids a rewrite when someone loads a
-   string ten times the size of `synthetic-cic/`.
+`StringAnalysis` is an *index*, not a copy. A million lines of C is ~9.1M tokens of source; the
+message table, cross-app edges, unresolved items and struct stubs derived from it are ~122K.
+The analyzer throws away the 98.7% that is control flow, arithmetic, logging and comments, and
+keeps the interface surface — which is exactly what analysts ask questions about.
 
-So: tight digest by default, tools for depth (§5).
+Measured against the digest row formats below (`chars/3.5`, pessimistic for C identifiers):
 
-`digest.ts` exports:
+| Scenario | SLOC | Raw source | Digest (§4.3) | Ratio |
+|---|---:|---:|---:|---:|
+| `synthetic-cic/` fixture | 1,537 | 14K | 0.8K | 17× |
+| Small string | 25,000 | 229K | 5.3K | 43× |
+| Medium string | 120,000 | 1.1M | 20K | 56× |
+| Large string | 400,000 | 3.7M | 53K | 69× |
+| Very large string | 1,000,000 | 9.1M | 122K | 75× |
+
+Compression *improves* with size, because interface surface grows sublinearly with
+implementation volume. A million-line string still fits a 256K window with room for a
+conversation. This is the whole reason the approach works.
+
+### 4.2 Four mechanisms, applied in order
+
+**1. Scope.** The panel defaults to *this application*, not all of them. An analyst asking
+about fire control does not need sonar's internals in context. Divides by the app count for
+free. Opening the panel from a message card or graph edge narrows further, to that one
+interface and its neighbours.
+
+**2. Index in context, bodies on demand.** This is the load-bearing decision. Measurement says
+struct field lists are ~63% of a naive digest — 173K of a 275K total at million-line scale —
+while the message table that analysts actually care about is only 35K. So struct *bodies* do
+not go inline. Each struct referenced by a message interface gets a one-line stub:
+
+```
+ContactMsg (72B, 12 fields, cic_protocol.h)
+```
+
+The full layout arrives through `getStructLayout` / `getStructGraph` when a question needs it.
+That single change takes the million-line case from 275K (does not fit) to 122K (fits, with
+134K to spare). The model knows the struct *exists*, what it costs, and where it lives — enough
+to decide whether to look it up.
+
+**3. Tools for depth.** A question touches a handful of entities, not thousands:
+
+| Question | Tool calls | Tokens pulled |
+|---|---|---:|
+| *"What struct does `MSG_TYPE_CONTACT` carry?"* | `getMessageInterface`, `getStructGraph(depth 6)` | ~2,100 |
+| *"Why is `MSG_TYPE_WEAPON_ORD` direction unknown?"* | `getMessageInterface`, `findUsages`, `getSourceLines`×3 | ~1,000 |
+| *"Suggest a pattern for `link11_write`"* | `getUnknownCalls`, `getSourceLines`×5 | ~1,400 |
+
+One to two thousand tokens of *exactly the right facts*, versus a hundred thousand of
+everything. This is also why precision beats coverage: a struct layout fetched by name is read
+correctly far more reliably than the same layout buried at position 180K in a stuffed prompt.
+
+**4. Degrade, don't truncate silently.** When even the index exceeds budget, drop tiers in
+priority order and *record every omission* in `omitted[]`, which the UI renders. The model is
+told in-prompt what was withheld and that tools can reach it. At the extreme — a string whose
+message table alone exceeds the window — the digest falls back to tier 1 plus a
+`searchMessages(pattern)` tool, and the model queries the index instead of reading it.
+
+The failure mode this avoids is the dangerous one: a model answering confidently from a context
+it doesn't know was cut.
+
+### 4.3 The tiers
+
+Fill the budget in priority order:
+
+| Tier | Content | ~Cost/entity | Notes |
+|---|---|---:|---|
+| 1 | App inventory: names, file counts, per-app produced/consumed constants | — | Always. Tiny. |
+| 2 | `MessageInterface` table: constant, value, struct name, direction + confidence, transport, `definedIn`, producer/consumer files | 39 tok | Always. The primary deliverable. |
+| 3 | Cross-app edges from `buildAppGraph`, incl. transit/broker routing | 13 tok | Always. Small. |
+| 4 | Struct **stubs** for structs reachable from a message interface | 11 tok | Bodies via tools |
+| 5 | Unresolved: `structResolved: false`, `direction: 'unknown'`, `incomplete`, low-confidence `payloadResolutions`, `headerGenBundle.review` | 27 tok | Where the questions cluster |
+| 6 | `unknownCalls` / unmatched IPC, deduped and frequency-ranked | 23 tok | Feeds §7 |
+| 7 | Risk flags, defines, enums, full function inventories | 24 tok | First dropped; tool-reachable |
+
+Budget default: `min(32_000, max_model_len * 0.25)`. The quarter-window cap is deliberate —
+it leaves room for tool results and a multi-turn conversation, and keeps the prompt in the
+range where recall stays sharp.
+
+### 4.4 Why not just stuff 256K
+
+Three reasons, beyond the fact that it stops working above ~2M SLOC:
+
+1. **Mid-context recall loss.** A byte offset at position 180K is materially less reliably
+   retrieved than the same fact at 20K. For this tool a *wrong* offset is worse than "I don't
+   know" — it ends up in a message spec.
+2. **Prefix cache economics.** On a shared GPU, a stable 20K digest prefix is cached and reused
+   across every turn of a conversation; only the question and tool results re-prefill. A 200K
+   prompt re-prefills constantly and evicts other analysts' blocks.
+3. **It hides the boundary.** With tiering, `omitted[]` states exactly what's missing. With
+   stuffing, you find out when an answer is quietly wrong.
+
+### 4.5 Implementation
 
 ```ts
 export interface DigestOptions {
@@ -188,36 +269,16 @@ export interface AnalysisDigest {
 }
 ```
 
-**Tiered inclusion.** Fill the budget in priority order, and record every omission:
+**Determinism matters here.** Given the same `StringAnalysis` and options, `buildDigest` returns
+byte-identical output — stable sort on every collection. Two payoffs: it is snapshot-testable
+against `test-fixtures/synthetic-cic/`, and it makes vLLM prefix caching actually hit, since the
+digest prefix is bit-identical across every turn.
 
-| Tier | Content | Notes |
-|---|---|---|
-| 1 | App inventory: names, file counts, per-app produced/consumed message constants | Always. Tiny. |
-| 2 | `MessageInterface` table: constant, value, struct name, direction + confidence, transport, `definedIn`, producing/consuming files | The primary deliverable. Always. |
-| 3 | Cross-app edges from `buildAppGraph`, including detected transit/broker routing | Always. Small. |
-| 4 | Struct *shapes* for structs referenced by a message interface: field names + types, total size, from `structCatalog` | Truncate long structs to first N fields + `… (k more fields)` |
-| 5 | Unresolved items: `structResolved: false`, `direction: 'unknown'`, `incomplete`, `payloadResolutions` with `confidence: 'low' \| 'unresolved'`, `headerGenBundle.review` | High analyst value — these are exactly the questions people ask |
-| 6 | `unknownCalls` and unmatched IPC calls, deduped and frequency-ranked | Feeds the pattern-suggestion flow (§7) |
-| 7 | Risk flags, defines, enums, full function inventories | First to be dropped |
-
-Source is never bulk-included; it arrives through `getSourceLines` (§5), which keeps the digest
-stable and the retrieved lines relevant.
-
-**Token estimation** uses `chars/3.5` — deliberately pessimistic for C identifiers, which are
-long and split into many tokens. It does not need to be exact; it needs to never
-under-estimate.
-
-**Determinism.** Given the same `StringAnalysis` and options, `buildDigest` returns
-byte-identical output. Stable sort on every collection. This makes it snapshot-testable against
-`test-fixtures/synthetic-cic/`, and it makes vLLM prefix caching effective across turns — the
-digest prefix is identical for every question in a conversation, so only the question and
-tool results re-prefill.
+**Token estimation** uses `chars/3.5`, deliberately pessimistic — C identifiers are long and
+tokenize badly. It must never under-estimate; exactness is not required.
 
 `redact` is an optional hook applied to every string before it enters the prompt — one place to
-implement identifier scrubbing if a deployment ever wants it, rather than auditing every call
-site later.
-
----
+implement identifier scrubbing if a deployment ever wants it.
 
 ## 5. Tool calling — and the streaming caveat that shapes it
 
@@ -286,6 +347,7 @@ deterministic TypeScript with no hallucination surface.
 | `getUnknownCalls(app)` | `FileAnalysis.unknownCalls` |
 | `getCrossAppEdges(constant?)` | `utils/buildAppGraph.ts` |
 | `getHeaderGenReview(app)` | `headerGenBundle.review` |
+| `searchMessages(pattern)` | `analysis.messageInterfaces` — the fallback when even the message table is withheld (§4.2) |
 
 Guardrails: max 6 tool-call rounds per question, max 10 calls per round, per-tool result size
 caps, and unknown tool names return a structured error the model can recover from rather than
@@ -395,8 +457,14 @@ Phase 4 is where it saves real analyst hours.
 ## 10. Testing
 
 - `digest.test.ts` — snapshot the digest for each `synthetic-cic/` app; assert budget is
-  respected, ordering is stable, tier priority holds under a squeezed budget, and `omitted[]`
-  accounts for everything dropped.
+  respected, ordering is stable, and byte-identical output across runs (the prefix-cache
+  guarantee).
+- `digest.degradation.test.ts` — walk the budget down from generous to absurd (32K → 8K → 2K →
+  200) against a synthetically inflated analysis, and assert at every step: tier priority is
+  honoured, tiers 1–2 survive longest, `omitted[]` accounts for **everything** dropped with no
+  silent truncation, and the tier-1-plus-`searchMessages` floor is reached rather than an
+  empty digest. This is the test that protects the property that actually matters — the model
+  is never quietly missing context it thinks it has.
 - `tools.test.ts` — each executor against the fixture analyses, including the six-level
   `ContactMsg` nest and the `timeval`/`sockaddr_in` system types from the fake include tree.
   Assert unknown tool names and out-of-range args return structured errors, not throws.
@@ -414,10 +482,12 @@ Phase 4 is where it saves real analyst hours.
 
 ## 11. Open questions
 
-1. **vLLM version on the serving host.** Determines whether the streaming tool-parser defects in
-   §5 are present (they were open as of 0.20.2) and whether `guided_*` still exists. The design
-   is safe either way — non-streaming tool turns and `response_format` work on every version —
-   but it decides whether `streamToolTurns` can eventually be flipped on.
+1. **vLLM version on the serving host.** Not currently known, and **not blocking**: non-streaming
+   tool turns and `response_format` work on every version, so the design is safe either way. It
+   only decides whether `streamToolTurns` can eventually be flipped on. Findable in seconds when
+   convenient — `curl -s http://<vllm-host>:8000/version`, or read the container image tag.
+   Worth knowing because it also tells you whether the OpenCode flakiness in
+   [#42696](https://github.com/vllm-project/vllm/issues/42696) applies to your existing setup.
 2. **Served `max_model_len`.** 262,144 on the card, but deployments differ. Read from
    `/v1/models`; worth confirming what the host is actually configured for, since it sets the
    digest budget ceiling.
