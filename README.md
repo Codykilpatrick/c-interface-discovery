@@ -1,6 +1,6 @@
 # C Interface Discovery
 
-A static analysis web application for mapping messaging interfaces in legacy C submarine combat system codebases. Runs 100% in the browser — zero network calls, zero backend. Deployable as a Docker container for airgapped environments.
+A static analysis web application for mapping messaging interfaces in legacy C submarine combat system codebases. Runs entirely in the browser — zero internet access, zero backend. Deployable as a Docker container for airgapped environments. An **optional** LLM assistant can connect to a self-hosted inference server on the same isolated network; with it disabled (the default) nothing makes a network request.
 
 ## What it does
 
@@ -135,6 +135,55 @@ The original three: load array + WCS + broker. The graph should show sensor arra
 Expected graph: Sonar → CIC → Fire Control for tracks, Sonar → CIC for contacts, Nav → CIC for own-ship, Fire Control → CIC for engage.
 
 Contact payloads nest six app structs (`ContactMsg` → `FusedContact` → `TrackKinematics` → `MotionState` → `DepthFix` → `GeoCoord` → `CicTime`) and then system types from the fake include tree (`timeval` / `__time_t` in `sys/time.h` and `bits/types.h`, `sockaddr_in` / `in_addr` in `netinet/in.h`).
+
+## Optional LLM assistant
+
+Disabled by default. When enabled, the app can query a **self-hosted Gemma 4 model served by
+vLLM** on the same airgapped network — no internet access is involved. Analysis never depends
+on it: with the feature off, or the endpoint unreachable, every existing code path behaves
+exactly as before.
+
+### Run the app with the LLM proxy
+
+```bash
+docker run -d -p 8080:80 \
+  -e LLM_UPSTREAM=vllm-host:8000 \
+  --name cid c-interface-discovery:2.1.0
+```
+
+`LLM_UPSTREAM` is optional. When it is set, nginx proxies `/llm/` to that host; when it is
+unset the proxy block is stripped and `/llm/` returns 404, which the app reads as "no LLM
+available". The proxy keeps the browser same-origin, which matters because the
+`Cross-Origin-Embedder-Policy: require-corp` header that tree-sitter WASM needs would otherwise
+force CORS *and* CORP headers out of vLLM.
+
+`docker-compose.yml` runs app + vLLM together.
+
+### Serving Gemma 4 for this app
+
+```bash
+vllm serve google/gemma-4-26B-A4B-it \
+  --enable-auto-tool-choice \
+  --tool-call-parser gemma4 \
+  --reasoning-parser gemma4 \
+  --chat-template examples/tool_chat_template_gemma4.jinja
+```
+
+The chat template is not optional — the stock HuggingFace Gemma 4 template does not emit the
+tool-definition encoding the `gemma4` parser expects.
+
+### Verify after transfer
+
+Open **LLM Assistant → Run diagnostics**. It probes each capability the assistant needs —
+reachability, non-streaming completion, SSE streaming, tool calling, structured output,
+reasoning split — and prints what failed and what to change. **↓ Save report** writes a text
+file you can carry off the host. This is the acceptance test for a new deployment.
+
+> Leave **Stream tool-call turns** off. vLLM's `gemma4` tool parser has open streaming defects
+> ([#42696](https://github.com/vllm-project/vllm/issues/42696),
+> [#44522](https://github.com/vllm-project/vllm/issues/44522)) reported at 21–35% success
+> streaming versus 100% non-streaming. The app streams the final answer with `tool_choice:
+> none`, which never exercises that path.
 
 ## Design docs
 

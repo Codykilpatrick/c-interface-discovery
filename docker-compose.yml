@@ -1,0 +1,39 @@
+# App + vLLM on one airgapped host.
+#
+# The app image works standalone too — `docker run -p 8080:80 c-interface-discovery`
+# with no LLM_UPSTREAM starts with the /llm/ proxy stripped and the LLM features
+# hidden. This file is for sites that want both.
+services:
+  cid:
+    image: c-interface-discovery:2.1.0
+    build: .
+    ports:
+      - "8080:80"
+    environment:
+      # Points the /llm/ proxy at the vLLM container below. Omit to disable.
+      LLM_UPSTREAM: "vllm:8000"
+    depends_on:
+      - vllm
+    restart: unless-stopped
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    # Tool calling needs the parser *and* the vendored chat template — the stock
+    # HuggingFace Gemma 4 template does not emit the encoding the parser expects.
+    command:
+      - --model=google/gemma-4-26B-A4B-it
+      - --enable-auto-tool-choice
+      - --tool-call-parser=gemma4
+      - --reasoning-parser=gemma4
+      - --chat-template=examples/tool_chat_template_gemma4.jinja
+    volumes:
+      # Pre-staged weights; no network on an airgapped host.
+      - ./models:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped

@@ -35,6 +35,7 @@ import DefinesSection from './components/sections/DefinesSection';
 import UnknownsSection from './components/sections/UnknownsSection';
 import RiskSection from './components/sections/RiskSection';
 import CompositionSection from './components/sections/CompositionSection';
+import LlmSettings from './components/LlmSettings';
 import { summarizeComposition } from './analyzer/messageComposition';
 
 function genId(): string {
@@ -890,6 +891,14 @@ export default function App() {
                   matchCounts={msgStructMatchCounts}
                 />
               </div>
+            </div>
+
+            {/* LLM assistant */}
+            <div className="mt-8 border-t border-gray-800 pt-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                LLM Assistant
+              </h2>
+              <LlmSettings />
             </div>
           </>
         )}

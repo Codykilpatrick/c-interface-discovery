@@ -110,6 +110,24 @@ path in the README keeps working unchanged.
 
 ## 3. Provider layer — `src/llm/`
 
+> **Built without endpoint access.** This integration is developed on one network and verified
+> on another, after a media transfer. Two consequences shaped the code:
+>
+> 1. **Everything testable offline is tested offline.** `__tests__/mockServer.ts` replays vLLM's
+>    actual wire format — SSE frames, `tool_calls`, `reasoning_content`, OpenAI error bodies —
+>    with controllable chunk boundaries, because chunk splitting is where SSE parsing really
+>    breaks. 98 tests cover the client, parser, config and deployment template.
+> 2. **The verification travels with the code.** `diagnostics.ts` probes each capability the
+>    assistant needs and reports what failed and what to change; the panel has a *Save report*
+>    button so a result can be carried back off the airgapped host. That is the acceptance
+>    test, run on the far side of the transfer rather than here.
+>
+> What remains genuinely unverifiable until then: whether Gemma 4 *chooses* to call the right
+> tool for a real question, and whether the deployed vLLM version carries the streaming
+> tool-parser defects. The first is a prompt-quality question; the second is exactly what the
+> tool-calling probe answers.
+
+
 New module, no dependencies on React, unit-testable without a server.
 
 ```
@@ -843,12 +861,12 @@ What must not change:
 
 | Phase | Scope | Ships |
 |---|---|---|
-| **0** | `LlmConfig`, settings panel, `client.ts`, health check + `max_model_len` discovery, nginx proxy + entrypoint templating, docker-compose | Plumbing verified against the real vLLM host. Panel visible, no analysis awareness. |
+| **0** ✅ | `LlmConfig`, settings panel, `client.ts` + `sse.ts`, health check + `max_model_len` discovery, `diagnostics.ts` capability probes, nginx templating + entrypoint + docker-compose | **Done.** 98 offline tests against a replayed-wire-format mock; on-host verification is the diagnostics panel. |
 | **1** | `digest.ts` + snapshot tests against `synthetic-cic/`. Context inspector UI. | Digest inspectable/exportable before any model sees it. Fully testable with no server. |
 | **2** | Ask panel: scope selector, streaming answers, cancel, reasoning disclosure, citation chips wired to drill-down | The core feature. Digest-only, no tools. |
 | **3** | `tools.ts` + the split streaming/non-streaming request loop + tool-call trace UI | Deep struct nests and exact line numbers become reliable. |
-| **1.4** | `detectPackAttribute()` real implementation (§9.5) — retain raw declaration span or record pack pragmas in `headerParser` | Prerequisite for trusting any byte offset. |
-| **1.5** | `structRoleAnalyzer.ts` — containment graph, root/envelope/block classification, `structRoles` on `StringAnalysis`; `PaddingGap[]` + 32/64 target diff (§9); `MessageComposition` projection + "Message Composition" UI panel (§10) | Pure analyzer work, no LLM. Useful on its own; improves the digest and grounds §8–9 questions. |
+| **1.4** ✅ | `detectPackAttribute()` real implementation (§9.5) — retain raw declaration span or record pack pragmas in `headerParser` | Prerequisite for trusting any byte offset. |
+| **1.5** ✅ | `structRoleAnalyzer.ts` — containment graph, root/envelope/block classification, `structRoles` on `StringAnalysis`; `PaddingGap[]` + 32/64 target diff (§9); `MessageComposition` projection + "Message Composition" UI panel (§10) | Pure analyzer work, no LLM. Useful on its own; improves the digest and grounds §8–9 questions. |
 | **4** | Pattern suggestion with analyzer verification (§7); canned analyses for unresolved structs / unknown directions / `headerGenBundle.review` | The force-multiplier phase. |
 
 Phases 0–2 are independently useful. Phase 3 is what makes it trustworthy on a large codebase.
