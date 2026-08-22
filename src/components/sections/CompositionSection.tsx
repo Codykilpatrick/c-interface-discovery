@@ -9,6 +9,8 @@ interface CompositionSectionProps {
   structRoles?: StructRoleReport;
   /** Target the byte offsets were computed for. */
   target: '32bit' | '64bit';
+  /** Open the Ask panel scoped to one message. Omitted when the LLM is off. */
+  onAsk?: (constant: string) => void;
 }
 
 const ROLE_LABEL: Record<StructRole, string> = {
@@ -88,7 +90,11 @@ function PartRow({ part, depth }: { part: CompositionPart; depth: number }) {
   );
 }
 
-function MessageCard({ comp, target }: { comp: MessageComposition; target: '32bit' | '64bit' }) {
+function MessageCard({ comp, target, onAsk }: {
+  comp: MessageComposition;
+  target: '32bit' | '64bit';
+  onAsk?: (constant: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const other = target === '64bit' ? '32bit' : '64bit';
 
@@ -167,9 +173,19 @@ function MessageCard({ comp, target }: { comp: MessageComposition; target: '32bi
               )}
             </div>
           )}
-          <p className="text-[11px] text-gray-600 mt-2">
-            Offsets are absolute within {comp.rootStruct}, computed for the {target.replace('bit', '-bit')} target.
-          </p>
+          <div className="flex items-center justify-between mt-2 gap-2">
+            <p className="text-[11px] text-gray-600">
+              Offsets are absolute within {comp.rootStruct}, computed for the {target.replace('bit', '-bit')} target.
+            </p>
+            {onAsk && (
+              <button
+                className="px-2 py-1 text-[11px] bg-gray-800 hover:bg-blue-900/60 text-gray-400 hover:text-blue-200 rounded whitespace-nowrap"
+                onClick={(e) => { e.stopPropagation(); onAsk(comp.msgConstant); }}
+              >
+                ✦ Ask about this
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -180,6 +196,7 @@ export default function CompositionSection({
   compositions,
   structRoles,
   target,
+  onAsk,
 }: CompositionSectionProps) {
   if (compositions.length === 0) return null;
 
@@ -210,7 +227,7 @@ export default function CompositionSection({
       )}
 
       {compositions.map((c) => (
-        <MessageCard key={c.msgConstant} comp={c} target={target} />
+        <MessageCard key={c.msgConstant} comp={c} target={target} onAsk={onAsk} />
       ))}
 
       {candidates.length > 0 && (

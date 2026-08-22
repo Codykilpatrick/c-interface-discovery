@@ -172,6 +172,23 @@ vllm serve google/gemma-4-26B-A4B-it \
 The chat template is not optional — the stock HuggingFace Gemma 4 template does not emit the
 tool-definition encoding the `gemma4` parser expects.
 
+### Asking questions
+
+With the assistant enabled, an **✦ Ask** button appears in the header. The panel scopes to one
+application, all of them, or a single message, and answers are grounded in analyzer output:
+
+- The prompt carries a **tiered digest** of the analysis — message table with composition and
+  both target sizes, struct stubs, unresolved items, unmatched calls. Struct *bodies* are not in
+  the prompt; they arrive through a tool call when a question needs them.
+- The model reaches the rest through **10 read-only tools** (`getStructLayout`,
+  `getStructGraph`, `findUsages`, `getPayloadResolutions`, `getSourceLines`, …). Every one is
+  deterministic TypeScript over the in-memory analysis — the model never computes an offset.
+- The **tool-call trace** shows exactly which analyzer facts an answer was built from, and
+  **what was sent?** expands the full digest.
+- Citations like `router.c:142` are clickable and drill into the file view.
+- When the digest cannot fit, omissions are recorded, shown in the UI, and stated in the prompt
+  so the model knows to use a tool rather than assume something does not exist.
+
 ### Verify after transfer
 
 Open **LLM Assistant → Run diagnostics**. It probes each capability the assistant needs —

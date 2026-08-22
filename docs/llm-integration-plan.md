@@ -862,9 +862,9 @@ What must not change:
 | Phase | Scope | Ships |
 |---|---|---|
 | **0** ✅ | `LlmConfig`, settings panel, `client.ts` + `sse.ts`, health check + `max_model_len` discovery, `diagnostics.ts` capability probes, nginx templating + entrypoint + docker-compose | **Done.** 98 offline tests against a replayed-wire-format mock; on-host verification is the diagnostics panel. |
-| **1** | `digest.ts` + snapshot tests against `synthetic-cic/`. Context inspector UI. | Digest inspectable/exportable before any model sees it. Fully testable with no server. |
-| **2** | Ask panel: scope selector, streaming answers, cancel, reasoning disclosure, citation chips wired to drill-down | The core feature. Digest-only, no tools. |
-| **3** | `tools.ts` + the split streaming/non-streaming request loop + tool-call trace UI | Deep struct nests and exact line numbers become reliable. |
+| **1** ✅ | `digest.ts` + tests against `synthetic-cic/`. Context inspector UI. | **Done.** Tiered, budget-aware, byte-identical output; omissions recorded and stated in-prompt. |
+| **2** ✅ | Ask panel: scope selector, streaming answers, cancel, reasoning disclosure, tool-call trace, context inspector, citation chips wired to drill-down | **Done.** |
+| **3** ✅ | `tools.ts` (10 executors) + `conversation.ts` split request loop + tool-call trace UI | **Done.** Tool turns non-streaming, final turn streaming with `tool_choice: none`. |
 | **1.4** ✅ | `detectPackAttribute()` real implementation (§9.5) — retain raw declaration span or record pack pragmas in `headerParser` | Prerequisite for trusting any byte offset. |
 | **1.5** ✅ | `structRoleAnalyzer.ts` — containment graph, root/envelope/block classification, `structRoles` on `StringAnalysis`; `PaddingGap[]` + 32/64 target diff (§9); `MessageComposition` projection + "Message Composition" UI panel (§10) | Pure analyzer work, no LLM. Useful on its own; improves the digest and grounds §8–9 questions. |
 | **4** | Pattern suggestion with analyzer verification (§7); canned analyses for unresolved structs / unknown directions / `headerGenBundle.review` | The force-multiplier phase. |
