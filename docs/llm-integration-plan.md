@@ -1,7 +1,10 @@
 # LLM Integration Plan — Asking Questions About Analysis Output
 
-Status: **proposed**, not implemented.
+Status: **implemented** (phases 0–4). Kept as the design rationale for the shipped code.
 Target backend: **Gemma 4 26B A4B**, served by vLLM on the airgapped network.
+
+Not yet verified against the real endpoint — see §3 on how that verification is meant to
+happen after the media transfer.
 
 The goal: after the analyzer has produced a `StringAnalysis` for each application, an analyst
 can ask natural-language questions about it — *"which apps consume `MSG_TYPE_TRACK` and what
@@ -867,7 +870,7 @@ What must not change:
 | **3** ✅ | `tools.ts` (10 executors) + `conversation.ts` split request loop + tool-call trace UI | **Done.** Tool turns non-streaming, final turn streaming with `tool_choice: none`. |
 | **1.4** ✅ | `detectPackAttribute()` real implementation (§9.5) — retain raw declaration span or record pack pragmas in `headerParser` | Prerequisite for trusting any byte offset. |
 | **1.5** ✅ | `structRoleAnalyzer.ts` — containment graph, root/envelope/block classification, `structRoles` on `StringAnalysis`; `PaddingGap[]` + 32/64 target diff (§9); `MessageComposition` projection + "Message Composition" UI panel (§10) | Pure analyzer work, no LLM. Useful on its own; improves the digest and grounds §8–9 questions. |
-| **4** | Pattern suggestion with analyzer verification (§7); canned analyses for unresolved structs / unknown directions / `headerGenBundle.review` | The force-multiplier phase. |
+| **4** ✅ | Pattern suggestion with analyzer verification (§7) — `suggest.ts` + `PatternSuggestions.tsx` | **Done.** Every proposal is compiled and run against the corpus before display; invalid or zero-match proposals never surface. |
 
 Phases 0–2 are independently useful. Phase 3 is what makes it trustworthy on a large codebase.
 Phase 4 is where it saves real analyst hours.

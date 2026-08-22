@@ -189,6 +189,19 @@ application, all of them, or a single message, and answers are grounded in analy
 - When the digest cannot fit, omissions are recorded, shown in the UI, and stated in the prompt
   so the model knows to use a tool rather than assume something does not exist.
 
+### Suggesting custom patterns
+
+The registry's blind spot is project-specific messaging wrappers. With the assistant on,
+**✦ Suggest from N calls** appears above the pattern registry: it hands the model the
+frequency-ranked unclassified calls with real call sites, and asks which are transport wrappers.
+
+Nothing the model proposes is displayed until it has been **compiled and run against the loaded
+source**. A proposal that is not a valid regex, matches nothing, matches the empty string, or
+duplicates an existing entry is discarded — you see the match count and real matching lines
+before deciding. Accept routes through the normal registry and triggers a re-analysis.
+
+The model writes a hypothesis; the analyzer decides whether it survives.
+
 ### Verify after transfer
 
 Open **LLM Assistant → Run diagnostics**. It probes each capability the assistant needs —

@@ -37,6 +37,7 @@ import RiskSection from './components/sections/RiskSection';
 import CompositionSection from './components/sections/CompositionSection';
 import LlmSettings from './components/LlmSettings';
 import AskPanel from './components/AskPanel';
+import PatternSuggestions from './components/PatternSuggestions';
 import { loadLlmConfig, type LlmConfig } from './llm/config';
 import { summarizeComposition } from './analyzer/messageComposition';
 
@@ -888,6 +889,15 @@ export default function App() {
                 <ConfigButtons onExport={handleExportConfig} onImport={handleImportConfig} />
               </div>
               <div className="space-y-2">
+                {llmEnabled && hasAnyAnalysis && (
+                  <PatternSuggestions
+                    apps={applications}
+                    appId={null}
+                    existingPatterns={patterns}
+                    onAccept={handleAddPattern}
+                    onReanalyze={handleReanalyze}
+                  />
+                )}
                 <PatternRegistryUI
                   patterns={patterns}
                   onAdd={handleAddPattern}
