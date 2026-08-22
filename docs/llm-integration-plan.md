@@ -347,6 +347,8 @@ deterministic TypeScript with no hallucination surface.
 | `getUnknownCalls(app)` | `FileAnalysis.unknownCalls` |
 | `getCrossAppEdges(constant?)` | `utils/buildAppGraph.ts` |
 | `getHeaderGenReview(app)` | `headerGenBundle.review` |
+| `getPaddingMap(struct, target)` | `structLayoutEngine` — located padding gaps (§9) |
+| `getLayoutDiff(struct)` | 32-bit vs 64-bit size/offset diff (§9.4) |
 | `getStructRoles(app)` | `structRoleAnalyzer` — wire roots, envelopes, shared blocks (§8) |
 | `searchMessages(pattern)` | `analysis.messageInterfaces` — the fallback when even the message table is withheld (§4.2) |
 
@@ -542,7 +544,136 @@ New tool: `getStructRoles(app)`. Added to the §5 table.
 
 ---
 
-## 9. Scope discipline
+## 9. Padding and wire layout — "are there 8 padding bytes between block 1 and block 2?"
+
+No — §8 answers *topology* (who contains whom), not *bytes*. That is a separate question, it is
+also deterministic, and for a wire-format tool it is arguably the more important of the two.
+
+### 9.1 What exists, and the gap
+
+`structLayoutEngine.ts` already computes real layout: per-field `offsetBytes`, `sizeBytes`,
+`alignBytes`, correct `alignUp()` behaviour, nested struct recursion, and separate 32-bit and
+64-bit primitive tables (`PRIM32` / `PRIM64`) selected by the existing `layoutTarget` setting.
+
+What it does **not** do is *report* padding as a located fact. `CStructLayout.paddingBytes` is a
+single scalar — `internalPaddingBytes + tail` — so you can learn a struct wastes 7 bytes but not
+*where* or *why*. The gaps are recoverable arithmetic
+(`next.offsetBytes - (prev.offsetBytes + prev.sizeBytes)`) that nothing currently performs.
+
+### 9.2 What to add — `PaddingGap[]`
+
+```ts
+export interface PaddingGap {
+  afterField: string | null;     // null = leading; the field the gap follows
+  beforeField: string | null;    // null = tail padding
+  offsetBytes: number;
+  sizeBytes: number;
+  reason: 'align-member' | 'align-struct-tail' | 'bitfield-straddle';
+  causedByAlign: number;         // the alignment requirement that forced it
+  causedByType: string | null;   // the type imposing that alignment
+  atCompositionBoundary: boolean; // both neighbours are struct members, not scalars
+}
+```
+
+Attached to `CStructLayout`, with `paddingBytes` kept as the sum for compatibility.
+`atCompositionBoundary` is the flag that answers the question as asked: a gap sitting *between
+two embedded blocks*, as distinct from ordinary intra-struct slack.
+
+### 9.3 Verified against `synthetic-cic/`
+
+Computed for `ContactMsg`, the six-level nested payload:
+
+```
+===== ContactMsg — 32-bit =====  size=108  align=4
+     0  hdr           12B  CicHeader
+    12  body          80B  FusedContact
+    92  origin        16B  sockaddr_in
+
+===== ContactMsg — 64-bit =====  size=136  align=8
+     0  hdr           12B  CicHeader
+    12                 4B  <<< PADDING   (composition boundary)
+    16  body         104B  FusedContact
+   120  origin        16B  sockaddr_in
+```
+
+So: **on 64-bit there are 4 padding bytes between `hdr` and `body`; on 32-bit there are none.**
+Exactly the question, and the answer depends on the target.
+
+The causal chain is worth surfacing verbatim, because no analyst reconstructs this by eye:
+
+> `FusedContact` requires 8-byte alignment → from `TrackKinematics` → `MotionState` →
+> `DepthFix` → `GeoCoord` → `CicTime` → `timeval` → `__time_t` = `long`, which is 8 bytes on
+> 64-bit and 4 on 32-bit.
+
+One typedef, six levels down, in a fake `usr/include` tree, silently moves every byte after
+offset 12.
+
+### 9.4 The real prize: the 32/64 diff
+
+`layoutTarget` already exists but only renders one target at a time. Computing both and diffing
+is nearly free and is the highest-value output in this whole plan for a legacy estate:
+
+| Struct | 32-bit | 64-bit | |
+|---|---:|---:|---|
+| `CicHeader` | 12B (3 pad) | 12B (3 pad) | stable |
+| `timeval` | 8B | 16B | **differs** |
+| `CicTime` | 12B | 24B | **differs** |
+| `MotionState` | 32B | 48B | **differs** |
+| `TrackKinematics` | 44B | 64B | **differs** |
+| `FusedContact` | 80B | 104B | **differs** |
+| `ContactMsg` | **108B** | **136B** | **differs — 28 bytes** |
+
+If a 32-bit box and a 64-bit box exchange `MSG_TYPE_CONTACT`, every field after the header
+lands at the wrong offset and the receiver silently reads garbage. That is a genuine class of
+interop bug in a mixed-age estate, it is completely invisible in the source, and the analyzer
+can find every instance of it without a model.
+
+Note also `CicHeader`: 9 bytes of data, 12 bytes on the wire — **3 tail padding bytes at the
+front of all 8 messages** on both targets. Stable, but it is 3 bytes nobody put there on
+purpose.
+
+### 9.5 ⚠ Prerequisite: packing detection
+
+`detectPackAttribute()` in `structLayoutEngine.ts` is currently a stub that always returns
+`undefined`, with a comment explaining why: `CStruct` retains parsed fields but not the raw
+attribute text, so `__attribute__((packed))` and `#pragma pack(n)` are invisible.
+
+**Everything in this section is wrong for a packed struct** — packing is precisely the
+mechanism that removes the padding being reported. Before padding output is shown to analysts
+or handed to the model, `detectPackAttribute` needs a real implementation (retain the raw
+declaration span on `CStruct`, or have `headerParser` record pack pragmas as it walks). Until
+then any padding view must be badged with whether packing detection ran, and `isEstimated`
+must be surfaced rather than hidden.
+
+Reporting confident byte offsets for a struct that is actually packed is worse than reporting
+nothing.
+
+### 9.6 Where the model comes in
+
+Same division as §8 — the arithmetic is the analyzer's, the explanation is the model's:
+
+- **Narrate the causal chain.** *"The 4-byte gap exists because `long` is 8 bytes on this
+  target, inherited from `timeval` six levels down."* Multi-hop, tedious, exactly what an LLM
+  does well over facts it was handed.
+- **Answer the follow-ups** — *"which messages change size between targets?"*,
+  *"what would reordering `CicHeader` save?"*, *"which of these cross an app boundary?"*
+  (→ `getCrossAppEdges`, so a size mismatch on an actual inter-app edge ranks above one on an
+  internal message).
+- **Never compute offsets.** Every number comes from `getPaddingMap` / `getLayoutDiff`. If the
+  model is doing alignment arithmetic in prose, that is a bug.
+
+New tools: `getPaddingMap(struct, target)` and `getLayoutDiff(struct)`. Added to the §5 table.
+
+### 9.7 Delivery
+
+Extends the same phase as §8 — `PaddingGap[]` and the target diff are additions to
+`structLayoutEngine.ts`, no LLM dependency, and immediately useful in the existing structs UI as
+a byte-map with padding rendered inline. Packing detection (§9.5) is a prerequisite and should
+be sequenced first.
+
+---
+
+## 10. Scope discipline
 
 The README's headline promise is *"Runs 100% in the browser — zero network calls, zero
 backend."* This changes that, and the wording gets updated to "zero internet access; optional
@@ -562,7 +693,7 @@ What must not change:
 
 ---
 
-## 10. Phases
+## 11. Phases
 
 | Phase | Scope | Ships |
 |---|---|---|
@@ -570,7 +701,8 @@ What must not change:
 | **1** | `digest.ts` + snapshot tests against `synthetic-cic/`. Context inspector UI. | Digest inspectable/exportable before any model sees it. Fully testable with no server. |
 | **2** | Ask panel: scope selector, streaming answers, cancel, reasoning disclosure, citation chips wired to drill-down | The core feature. Digest-only, no tools. |
 | **3** | `tools.ts` + the split streaming/non-streaming request loop + tool-call trace UI | Deep struct nests and exact line numbers become reliable. |
-| **1.5** | `structRoleAnalyzer.ts` — containment graph, root/envelope/block classification, "Message Composition" UI panel, `structRoles` on `StringAnalysis` | Pure analyzer work, no LLM. Useful on its own; improves the digest and grounds §8 questions. |
+| **1.4** | `detectPackAttribute()` real implementation (§9.5) — retain raw declaration span or record pack pragmas in `headerParser` | Prerequisite for trusting any byte offset. |
+| **1.5** | `structRoleAnalyzer.ts` — containment graph, root/envelope/block classification, "Message Composition" UI panel, `structRoles` on `StringAnalysis`; `PaddingGap[]` + 32/64 target diff (§9) | Pure analyzer work, no LLM. Useful on its own; improves the digest and grounds §8–9 questions. |
 | **4** | Pattern suggestion with analyzer verification (§7); canned analyses for unresolved structs / unknown directions / `headerGenBundle.review` | The force-multiplier phase. |
 
 Phases 0–2 are independently useful. Phase 3 is what makes it trustworthy on a large codebase.
@@ -578,7 +710,7 @@ Phase 4 is where it saves real analyst hours.
 
 ---
 
-## 11. Testing
+## 12. Testing
 
 - `digest.test.ts` — snapshot the digest for each `synthetic-cic/` app; assert budget is
   respected, ordering is stable, and byte-identical output across runs (the prefix-cache
@@ -593,6 +725,10 @@ Phase 4 is where it saves real analyst hours.
   constants map to 8 wire roots, `CicHeader` classifies as `ENVELOPE` (not a root), `TrackMsg`
   as dual-role, `TrackKinematics` as a shared block (the proximity false-positive), and the
   variable-length arrays in `PictureTable`/`SonarFrame` are flagged.
+- `padding.test.ts` — assert the §9.3 byte map for `ContactMsg` on both targets: the 4-byte
+  composition-boundary gap at offset 12 on 64-bit and its absence on 32-bit, `CicHeader`'s 3
+  tail bytes, and the full §9.4 size table. `timeval` → `__time_t` → `long` is the mechanism, so
+  this doubles as a regression test on typedef-chase depth through the fake `usr/include` tree.
 - `tools.test.ts` — each executor against the fixture analyses, including the six-level
   `ContactMsg` nest and the `timeval`/`sockaddr_in` system types from the fake include tree.
   Assert unknown tool names and out-of-range args return structured errors, not throws.
@@ -608,7 +744,7 @@ Phase 4 is where it saves real analyst hours.
 
 ---
 
-## 12. Open questions
+## 13. Open questions
 
 1. **vLLM version on the serving host.** Not currently known, and **not blocking**: non-streaming
    tool turns and `response_format` work on every version, so the design is safe either way. It
