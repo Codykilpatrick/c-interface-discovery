@@ -1,6 +1,7 @@
 import type Parser from 'web-tree-sitter';
 import type { AnalysisWarning, CDefine, CEnum, CField, CStruct, LoadedFile, TypeDict } from './types';
 import { extractConditionalBlocks } from './preprocessor';
+import { buildPackMap, resolvePack } from './packDetection';
 
 export interface HeaderParseResult {
   typeDict: TypeDict;
@@ -35,6 +36,23 @@ const ENUM_QUERY = `
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Full declaration text for a struct body, so `__attribute__((packed))` is visible
+ *  wherever GCC allows it — before the struct keyword, after the brace, or after
+ *  the declarator. Walks up to the enclosing declaration and falls back to the
+ *  struct_specifier itself. */
+function declarationText(bodyNode: Parser.SyntaxNode): string {
+  let cur: Parser.SyntaxNode | null = bodyNode.parent;
+  let best: Parser.SyntaxNode | null = null;
+  for (let hops = 0; cur && hops < 4; hops++) {
+    if (cur.type === 'struct_specifier') best = cur;
+    if (cur.type === 'type_definition' || cur.type === 'declaration' || cur.type === 'field_declaration') {
+      return cur.text;
+    }
+    cur = cur.parent;
+  }
+  return best?.text ?? bodyNode.text;
+}
+
 function nodeText(node: Parser.SyntaxNode): string {
   return node.text.trim();
 }
@@ -44,8 +62,15 @@ function extractFields(bodyNode: Parser.SyntaxNode): CField[] {
   for (const child of bodyNode.children) {
     if (child.type === 'field_declaration') {
       const typeNode = child.childForFieldName('type') ?? child.children[0];
+      // `array_declarator` must be included or every array member is silently
+      // dropped — `char sin_zero[8]`, `char label[32]` — and every byte offset
+      // after it is wrong. The `[N]` is kept on the name so the layout engine
+      // sees the extent.
       const declarators = child.children.filter(
-        (c) => c.type === 'field_identifier' || c.type === 'pointer_declarator'
+        (c) =>
+          c.type === 'field_identifier' ||
+          c.type === 'pointer_declarator' ||
+          c.type === 'array_declarator'
       );
       const typeStr = typeNode ? nodeText(typeNode) : 'unknown';
       if (declarators.length > 0) {
@@ -139,6 +164,9 @@ export async function parseHeader(
   // Parse the full file with tree-sitter (all branches inlined by preprocessor)
   const tree = parser.parse(file.content);
 
+  // `#pragma pack` is lexically scoped, so resolve it per declaration line.
+  const packAt = buildPackMap(file.content);
+
   // ── Structs ──────────────────────────────────────────────────────────────
   try {
     const structQuery = parser.getLanguage().query(STRUCT_QUERY);
@@ -153,6 +181,10 @@ export async function parseHeader(
 
       const name = nodeText(nameCapture.node);
       const fields = extractFields(bodyCapture.node);
+      const pack = resolvePack(
+        declarationText(bodyCapture.node),
+        packAt(bodyCapture.node.startPosition.row),
+      );
       const isConditional =
         preResult.hasConditionals &&
         preResult.blocks.some(
@@ -184,6 +216,7 @@ export async function parseHeader(
           fields,
           sourceFile: file.filename,
           conditional: isConditional,
+          ...pack,
         });
       }
     }
@@ -261,13 +294,18 @@ export async function parseHeader(
   }
 
   // ── Typedef aliases ──────────────────────────────────────────────────────
-  // Capture plain `typedef ExistingType NewName;` (not struct/enum typedefs — those are handled above)
+  // Capture plain `typedef ExistingType NewName;` (not struct/enum typedefs — those are handled above).
+  // The base type may be several words: `typedef unsigned short __sa_family_t;`.
+  // Matching only single-word bases leaves system aliases unresolved, and the
+  // layout engine then substitutes pointer size for them — silently wrong offsets.
   {
-    const aliasRe = /\btypedef\s+(\w+)\s+(\w+)\s*;/g;
+    const aliasRe = /\btypedef\s+([A-Za-z_][\w\s]*?)\s+(\w+)\s*;/g;
     let m: RegExpExecArray | null;
     while ((m = aliasRe.exec(file.content)) !== null) {
-      const existing = m[1];
+      // `typedef struct timeval timeval;` aliases to the tag name, not `struct timeval`.
+      const existing = m[1].replace(/^(struct|union|enum)\s+/, '').trim();
       const alias = m[2];
+      if (!existing || existing === alias) continue;
       // Skip if the alias is itself a struct/enum name already captured
       const isStructOrEnum =
         result.typeDict.structs.some((s) => s.name === alias) ||

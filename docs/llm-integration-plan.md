@@ -633,11 +633,38 @@ Note also `CicHeader`: 9 bytes of data, 12 bytes on the wire — **3 tail paddin
 front of all 8 messages** on both targets. Stable, but it is 3 bytes nobody put there on
 purpose.
 
-### 9.5 ⚠ Prerequisite: packing detection
+### 9.5 Two parser bugs this work uncovered — both fixed
 
-`detectPackAttribute()` in `structLayoutEngine.ts` is currently a stub that always returns
-`undefined`, with a comment explaining why: `CStruct` retains parsed fields but not the raw
-attribute text, so `__attribute__((packed))` and `#pragma pack(n)` are invisible.
+Implementing §9 against the real fixture (not a hand-built dictionary) surfaced two
+pre-existing defects that made byte offsets wrong wherever they applied. Both are fixed, and
+both are the reason the integration test in §13 parses real headers rather than trusting a
+transcribed `TypeDict`:
+
+1. **Array members were dropped entirely.** `extractFields` in `headerParser.ts` collected only
+   `field_identifier` and `pointer_declarator` nodes. An `array_declarator` — `char
+   sin_zero[8]`, `char label[32]`, `char note[64]` — matched neither, fell through to a
+   fallback that saw only `;`, and vanished. Every struct with an array member was undersized
+   and every offset after it was wrong. `sockaddr_in` came out 3 fields long.
+2. **Multi-word typedefs were never registered.** The alias regex was
+   `/\btypedef\s+(\w+)\s+(\w+)\s*;/`, so `typedef long __time_t;` matched but
+   `typedef unsigned short __sa_family_t;` did not. Unregistered aliases fall through to the
+   unknown-type branch and silently take *pointer size* — `sin_family` became 8 bytes instead
+   of 2, making `sockaddr_in` 32 bytes instead of 16.
+
+Both failed silently: the layout looked plausible, just wrong. That is the argument for
+surfacing `isEstimated` in the UI rather than hiding it — the second bug was visible as an
+`estimated` badge before it was diagnosed.
+
+The layout engine also now chases typedef chains to primitives (`time_t` → `__time_t` → `long`),
+which it previously did not do at all, and multiplies every array extent so `char grid[2][3]`
+counts 6 elements rather than 2.
+
+### 9.6 ⚠ Prerequisite: packing detection
+
+`detectPackAttribute()` was a stub that always returned `undefined`: `CStruct` retained parsed
+fields but not the raw attribute text, so `__attribute__((packed))` and `#pragma pack(n)` were
+invisible. **Now implemented** — `packDetection.ts` resolves both, and `headerParser` records
+the result on `CStruct.packAttribute` / `packSource`.
 
 **Everything in this section is wrong for a packed struct** — packing is precisely the
 mechanism that removes the padding being reported. Before padding output is shown to analysts
@@ -649,7 +676,7 @@ must be surfaced rather than hidden.
 Reporting confident byte offsets for a struct that is actually packed is worse than reporting
 nothing.
 
-### 9.6 Where the model comes in
+### 9.7 Where the model comes in
 
 Same division as §8 — the arithmetic is the analyzer's, the explanation is the model's:
 
@@ -665,11 +692,11 @@ Same division as §8 — the arithmetic is the analyzer's, the explanation is th
 
 New tools: `getPaddingMap(struct, target)` and `getLayoutDiff(struct)`. Added to the §5 table.
 
-### 9.7 Delivery
+### 9.8 Delivery
 
 Extends the same phase as §8 — `PaddingGap[]` and the target diff are additions to
 `structLayoutEngine.ts`, no LLM dependency, and immediately useful in the existing structs UI as
-a byte-map with padding rendered inline. Packing detection (§9.5) is a prerequisite and should
+a byte-map with padding rendered inline. Packing detection (§9.6) is a prerequisite and should
 be sequenced first.
 
 ---
@@ -788,7 +815,7 @@ New tool for the expanded form: `getMessageComposition(constant, depth)`. Added 
 Same phase as §8–9, as the UI surface for both: a "Message Composition" panel listing the
 summary render, each row expanding to the tree. It is the natural home for the target selector
 that `layoutTarget` already backs, and the obvious place to badge the packing-detection caveat
-from §9.5.
+from §9.6.
 
 ---
 

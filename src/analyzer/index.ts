@@ -7,8 +7,15 @@ import { extractMessageInterfaces } from './messagingExtractor';
 import { buildStructCatalog } from './structLayoutEngine';
 import type { LayoutOptions } from './structLayoutEngine';
 import { buildHeaderGenBundle } from './headerGenBundle';
+import { analyzeStructRoles } from './structRoleAnalyzer';
+import { buildMessageCompositions } from './messageComposition';
 
 let _parser: Parser | null = null;
+
+/** Escape a struct name for use in a word-boundary regex. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /** Initialize web-tree-sitter. Must be called once before analyzeString(). */
 export async function initParser(): Promise<void> {
@@ -86,6 +93,31 @@ export async function analyzeString(
   // Collect all payload resolutions from all source files
   const payloadResolutions = fileAnalyses.flatMap((fa) => fa.payloadResolutions ?? []);
 
+  // Pass 6: struct roles — which structs are wire messages vs composition blocks
+  const referencedInSource = new Set<string>();
+  for (const s of typeDict.structs) {
+    if (sources.some((f) => new RegExp(`\\b${escapeRegExp(s.name)}\\b`).test(f.content))) {
+      referencedInSource.add(s.name);
+    }
+  }
+  const structRoles = analyzeStructRoles({
+    typeDict,
+    messageInterfaces,
+    payloadResolutions,
+    structCatalog,
+    referencedInSource,
+  });
+
+  // Pass 7: per-message composition — a projection over passes 4–6, not a new
+  // source of truth, so it cannot disagree with the layout engine.
+  const messageCompositions = buildMessageCompositions({
+    messageInterfaces,
+    structRoles,
+    typeDict,
+    catalog: structCatalog,
+    target: layoutOpts.target,
+  });
+
   const headerGenBundle = buildHeaderGenBundle({
     messageInterfaces,
     payloadResolutions,
@@ -102,6 +134,8 @@ export async function analyzeString(
     msgStructPatterns,
     warnings,
     structCatalog,
+    structRoles,
+    messageCompositions,
     layoutTarget: layoutOpts.target,
     payloadResolutions: payloadResolutions.length > 0 ? payloadResolutions : undefined,
     headerGenBundle,

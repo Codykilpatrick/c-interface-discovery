@@ -34,6 +34,8 @@ import ExternsSection from './components/sections/ExternsSection';
 import DefinesSection from './components/sections/DefinesSection';
 import UnknownsSection from './components/sections/UnknownsSection';
 import RiskSection from './components/sections/RiskSection';
+import CompositionSection from './components/sections/CompositionSection';
+import { summarizeComposition } from './analyzer/messageComposition';
 
 function genId(): string {
   return Math.random().toString(36).slice(2, 11);
@@ -498,6 +500,49 @@ export default function App() {
         for (const r of file.risks) lines.push(`    [${r.severity}] ${r.msg}`);
       }
       lines.push('');
+    }
+
+    if (analysis.messageCompositions && analysis.messageCompositions.length > 0) {
+      const target = analysis.layoutTarget ?? '64bit';
+      const other = target === '64bit' ? '32bit' : '64bit';
+      const differing = analysis.messageCompositions.filter((c) => c.differsAcrossTargets);
+      lines.push('MESSAGE COMPOSITION:');
+      lines.push('='.repeat(60));
+      if (differing.length > 0) {
+        lines.push(
+          `  WARNING: ${differing.length} of ${analysis.messageCompositions.length} messages ` +
+          `change size between 32-bit and 64-bit.`
+        );
+        lines.push('');
+      }
+      for (const c of analysis.messageCompositions) {
+        const flag = c.differsAcrossTargets ? '  *** SIZE DIFFERS ***' : '';
+        lines.push(
+          `  ${c.msgConstant} -> ${c.rootStruct}  ` +
+          `${c.sizeByTarget[target]}B (${target}) / ${c.sizeByTarget[other]}B (${other})${flag}`
+        );
+        lines.push(`    = ${summarizeComposition(c)}`);
+        if (c.packAttribute !== undefined) lines.push(`    packed(${c.packAttribute})`);
+        if (c.isEstimated) lines.push('    NOTE: some member types unresolved — offsets estimated');
+        for (const w of c.pointerWarnings) lines.push(`    WARN pointer member: ${w}`);
+        for (const w of c.variableArrayWarnings) lines.push(`    WARN macro-length array: ${w}`);
+        lines.push('');
+      }
+    }
+
+    if (analysis.structRoles) {
+      const envelopes = analysis.structRoles.envelopes;
+      const candidates = analysis.structRoles.roles.filter((r) => r.role === 'root-candidate');
+      if (envelopes.length > 0 || candidates.length > 0) {
+        lines.push('STRUCT ROLES:');
+        lines.push('='.repeat(60));
+        if (envelopes.length > 0) lines.push(`  envelopes:       ${envelopes.join(', ')}`);
+        if (candidates.length > 0) {
+          lines.push(`  root candidates: ${candidates.map((r) => r.name).join(', ')}`);
+          lines.push('    (used in source, nothing embeds them, no message constant resolved)');
+        }
+        lines.push('');
+      }
     }
 
     if (analysis.messageInterfaces.length > 0) {
@@ -1118,6 +1163,16 @@ function DrillDownView({
           <SummaryBar analysis={analysis} />
           {analysis.headerGenBundle && (
             <HeaderGenBundlePanel process={app.name} bundle={analysis.headerGenBundle} onExport={onExportHeaderGen} />
+          )}
+
+          {analysis.messageCompositions && analysis.messageCompositions.length > 0 && (
+            <div className="mb-4">
+              <CompositionSection
+                compositions={analysis.messageCompositions}
+                structRoles={analysis.structRoles}
+                target={analysis.layoutTarget ?? '64bit'}
+              />
+            </div>
           )}
 
           {/* Graph */}
