@@ -347,6 +347,7 @@ deterministic TypeScript with no hallucination surface.
 | `getUnknownCalls(app)` | `FileAnalysis.unknownCalls` |
 | `getCrossAppEdges(constant?)` | `utils/buildAppGraph.ts` |
 | `getHeaderGenReview(app)` | `headerGenBundle.review` |
+| `getStructRoles(app)` | `structRoleAnalyzer` — wire roots, envelopes, shared blocks (§8) |
 | `searchMessages(pattern)` | `analysis.messageInterfaces` — the fallback when even the message table is withheld (§4.2) |
 
 Guardrails: max 6 tool-call rounds per question, max 10 calls per round, per-tool result size
@@ -419,7 +420,129 @@ This is the part of the integration worth building even if the chat panel never 
 
 ---
 
-## 8. Scope discipline
+## 8. Worked example: "what are my top-level structures?"
+
+A real analyst question, and a useful test of where the boundary sits:
+
+> *"We know what structs this process uses, but messages are sometimes a combination of
+> individual blocks into a message. What are my top-level structures?"*
+
+**This is not an LLM question.** It is a graph computation over data the analyzer already has,
+and it should be answered deterministically — then narrated by the model. Getting this
+backwards (asking Gemma to eyeball the struct list) produces plausible, unverifiable answers
+about byte-level wire formats, which is the one thing this tool must not do.
+
+### 8.1 The computation — `structRoleAnalyzer.ts`
+
+Build a **containment graph** from `structCatalog`: for each struct, for each field, resolve
+the field type through `canonicalName()` (already in `headerGenBundle.ts` — strips
+`const`/`*`/`[]`, follows typedef aliases up to 4 hops). A by-value field creates an edge
+parent → child. Pointer fields do *not* create containment edges, but are recorded — a pointer
+in a wire struct means it is not flat-serializable, which is a finding in itself.
+
+Then classify each struct by **in-degree** (how many distinct structs embed it) crossed with
+**binding evidence** (is it bound to a message?):
+
+| Class | Test | Meaning |
+|---|---|---|
+| `WIRE ROOT` | strong binding, in-degree 0 | A message. Top-level. |
+| `WIRE ROOT + aggregated` | strong binding, in-degree ≥ 1 | Both a message *and* a block inside a larger structure. The interesting case. |
+| `ENVELOPE` | in-degree ≥ 3 and first field in ≥ 80% of parents | A header prepended to many messages |
+| `ROOT candidate` | in-degree 0, referenced in sources, no binding | Probably a message with no detected pattern yet — feeds §7 |
+| `SHARED block` | in-degree ≥ 2 | A reusable building block |
+| `block` | in-degree 1 | A block with one parent |
+| `orphan` | in-degree 0, no source reference | Declared but unused, or reached only via headers |
+
+**Precedence matters, and this is the part that is easy to get wrong.** Two rules, both
+established by getting them wrong first on the fixture:
+
+1. **Envelope beats binding.** `CicHeader` sits textually adjacent to a `MSG_TYPE_*` constant
+   in nearly every file, because the idiom is `if (msg->hdr.msg_type == MSG_TYPE_X)`. A naive
+   classifier calls it a message root. It is an envelope embedded in 8 messages. Test envelope
+   first.
+2. **Binding must be *strong*, not proximity.** Strong means `MessageInterface.struct` with
+   `structResolved: true`, or a `PayloadResolution` with `high`/`medium` confidence at an actual
+   send site — i.e. the struct was resolved at a `cic_bus_send(bus, MSG_TYPE_X, &var, …)` call.
+   Textual co-occurrence promotes every shared block that happens to live near a constant
+   (`TrackKinematics`, in-degree 4, gets falsely promoted this way). The analyzer already
+   produces the strong signal; use it and ignore text proximity entirely.
+
+Most of the machinery exists. `headerGenBundle.ts` has `canonicalName()`, `lookupType()` and a
+recursive `walkType()` with `reachedFrom` tracking. Its `topLevel` is deliberately over-broad
+(it answers "which headers must header-gen ingest", so it includes every struct used anywhere),
+so this is a narrower reuse of the same walk, not new parsing.
+
+### 8.2 Verified output — `synthetic-cic/`
+
+Prototyped against the fixture. All 8 message constants resolve to exactly 8 wire roots,
+matching the README's documented ground truth. **This table is the acceptance criterion for the
+feature:**
+
+```
+STRUCT            in dep fld  CLASS                    EVIDENCE / NOTES
+EngageMsg          1   5   5  WIRE ROOT + aggregated   MSG_TYPE_ENGAGE  ← also inside FireDirective
+TrackMsg           1   5   6  WIRE ROOT + aggregated   MSG_TYPE_TRACK   ← also inside PictureTable[]
+ContactMsg         0   6   3  WIRE ROOT                MSG_TYPE_CONTACT
+NavFixMsg          0   4   3  WIRE ROOT                MSG_ID_NAV_FIX
+OwnShipMsg         0   4   3  WIRE ROOT                MSG_TYPE_OWN_SHIP
+HeartbeatMsg       0   1   2  WIRE ROOT                MSG_TYPE_HEARTBEAT
+LinkReportPkt      0   1   4  WIRE ROOT                PKT_TYPE_LINK_REPORT
+WeaponOrdMsg       0   1   4  WIRE ROOT                MSG_TYPE_WEAPON_ORD
+CicHeader          8   0   4  ENVELOPE                 first field of 8 messages
+PictureTable       0   6   2  ROOT candidate           ⚠ var-arr:tracks
+SonarFrame         0   1   3  ROOT candidate           ⚠ var-arr:beams
+FusedContact       2   5   3  SHARED block             reused by ContactMsg, SonarContact
+TrackKinematics    4   4   4  SHARED block             reused by AimSolution, TrackMsg, EngageMsg, FusedContact
+MotionState        2   3   3  SHARED block             reused by OwnShipMsg, TrackKinematics
+DepthFix           2   2   2  SHARED block             reused by GpsFix, MotionState
+AimSolution        1   5   3  block                    inside FireDirective
+GpsFix             1   3   2  block                    inside NavFixMsg
+GeoCoord           1   1   3  block                    inside DepthFix
+BeamBuffer         1   0   4  block                    inside SonarFrame
+CicTime            1   0   2  block                    inside GeoCoord
+PlatformStamp      1   0   2  block                    inside SonarFrame
+FireDirective      0   6   2  orphan (no source ref)
+SonarContact       0   6   3  orphan (no source ref)
+```
+
+Three things fall out that an analyst would want and that no struct list shows:
+
+- **`CicHeader` is the envelope** — the shared 4-field header on all 8 messages. Composition
+  made visible.
+- **`TrackMsg` is dual-role** — a wire message on `MSG_TYPE_TRACK` *and* embedded as
+  `TrackMsg tracks[CIC_MAX_TRACKS]` in `PictureTable`. Same bytes, two contexts: one on the
+  bus, one as an in-memory batch. Exactly the "combination of blocks" case in the question.
+- **`PictureTable` and `SonarFrame` carry variable-length arrays** — flagged, because
+  `sizeof()` lies about them on the wire.
+
+### 8.3 Where the model comes in
+
+The table is deterministic. The model's job is everything around it:
+
+- **Narrate it** — *"You have 8 wire messages. All share a 4-field `CicHeader` envelope.
+  `TrackKinematics` is your most-reused block, appearing in 4 different messages."*
+- **Answer follow-ups** via tools — *"which of these cross an app boundary?"* →
+  `getCrossAppEdges`; *"what's the wire size of the biggest one?"* → `getStructLayout`.
+- **Reason about the `ROOT candidate` rows** — these are the actionable ones. A candidate with
+  no binding usually means a messaging wrapper the pattern registry hasn't learned yet, which
+  routes straight into the suggest-and-verify flow in §7.
+- **Explain the orphans** — `FireDirective` and `SonarContact` are defined and never referenced
+  from source. Dead protocol, a missing file, or reached only through a header the analysis
+  didn't load.
+
+### 8.4 Delivery
+
+`structRoleAnalyzer.ts` runs as a pass in `analyzeString()` and lands in `StringAnalysis` as
+`structRoles`. It is worth building **before** any LLM work: it is a standalone UI section (a
+"Message Composition" panel next to Structs), it improves the digest for free — tier 4 stubs
+get a class label, so the model knows which structs are roots without a tool call — and it is
+exactly the kind of grounded fact the model should be reading rather than inferring.
+
+New tool: `getStructRoles(app)`. Added to the §5 table.
+
+---
+
+## 9. Scope discipline
 
 The README's headline promise is *"Runs 100% in the browser — zero network calls, zero
 backend."* This changes that, and the wording gets updated to "zero internet access; optional
@@ -439,7 +562,7 @@ What must not change:
 
 ---
 
-## 9. Phases
+## 10. Phases
 
 | Phase | Scope | Ships |
 |---|---|---|
@@ -447,6 +570,7 @@ What must not change:
 | **1** | `digest.ts` + snapshot tests against `synthetic-cic/`. Context inspector UI. | Digest inspectable/exportable before any model sees it. Fully testable with no server. |
 | **2** | Ask panel: scope selector, streaming answers, cancel, reasoning disclosure, citation chips wired to drill-down | The core feature. Digest-only, no tools. |
 | **3** | `tools.ts` + the split streaming/non-streaming request loop + tool-call trace UI | Deep struct nests and exact line numbers become reliable. |
+| **1.5** | `structRoleAnalyzer.ts` — containment graph, root/envelope/block classification, "Message Composition" UI panel, `structRoles` on `StringAnalysis` | Pure analyzer work, no LLM. Useful on its own; improves the digest and grounds §8 questions. |
 | **4** | Pattern suggestion with analyzer verification (§7); canned analyses for unresolved structs / unknown directions / `headerGenBundle.review` | The force-multiplier phase. |
 
 Phases 0–2 are independently useful. Phase 3 is what makes it trustworthy on a large codebase.
@@ -454,7 +578,7 @@ Phase 4 is where it saves real analyst hours.
 
 ---
 
-## 10. Testing
+## 11. Testing
 
 - `digest.test.ts` — snapshot the digest for each `synthetic-cic/` app; assert budget is
   respected, ordering is stable, and byte-identical output across runs (the prefix-cache
@@ -465,6 +589,10 @@ Phase 4 is where it saves real analyst hours.
   silent truncation, and the tier-1-plus-`searchMessages` floor is reached rather than an
   empty digest. This is the test that protects the property that actually matters — the model
   is never quietly missing context it thinks it has.
+- `structRoles.test.ts` — assert the §8.2 table exactly, against `synthetic-cic/`: all 8 message
+  constants map to 8 wire roots, `CicHeader` classifies as `ENVELOPE` (not a root), `TrackMsg`
+  as dual-role, `TrackKinematics` as a shared block (the proximity false-positive), and the
+  variable-length arrays in `PictureTable`/`SonarFrame` are flagged.
 - `tools.test.ts` — each executor against the fixture analyses, including the six-level
   `ContactMsg` nest and the `timeval`/`sockaddr_in` system types from the fake include tree.
   Assert unknown tool names and out-of-range args return structured errors, not throws.
@@ -480,7 +608,7 @@ Phase 4 is where it saves real analyst hours.
 
 ---
 
-## 11. Open questions
+## 12. Open questions
 
 1. **vLLM version on the serving host.** Not currently known, and **not blocking**: non-streaming
    tool turns and `response_format` work on every version, so the design is safe either way. It
