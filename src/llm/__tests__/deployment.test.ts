@@ -41,6 +41,7 @@ describe('nginx template', () => {
     // Without these the whole answer arrives in one lump, or is cut off.
     expect(block).toContain('proxy_buffering off;');
     expect(block).toMatch(/proxy_read_timeout\s+600s;/);
+    expect(block).toContain('client_max_body_size 10m;');
   });
 
   it('keeps the COEP header the tree-sitter WASM loader depends on', () => {
@@ -53,8 +54,9 @@ describe('docker-entrypoint.sh', () => {
     expect(entrypoint).toContain("envsubst '${LLM_UPSTREAM}'");
   });
 
-  it('strips the block on the unset branch rather than emitting a broken upstream', () => {
-    expect(entrypoint).toMatch(/sed .*LLM_BLOCK_START.*LLM_BLOCK_END.*d/);
+  it('replaces the block with a 404 when unset, so /llm/ does not serve index.html', () => {
+    expect(entrypoint).toMatch(/LLM_BLOCK_START.*LLM_BLOCK_END/);
+    expect(entrypoint).toContain('return 404');
   });
 
   it('validates the rendered config before starting, so failures are loud', () => {

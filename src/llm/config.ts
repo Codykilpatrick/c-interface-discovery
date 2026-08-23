@@ -38,7 +38,7 @@ export const DEFAULT_LLM_CONFIG: LlmConfig = {
   maxTokens: 4000,
   thinking: 'auto',
   digestBudgetTokens: 32_000,
-  includeSourceSnippets: true,
+  includeSourceSnippets: false,
   timeoutMs: 120_000,
 };
 

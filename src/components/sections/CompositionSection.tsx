@@ -165,7 +165,7 @@ function MessageCard({ comp, target, onAsk }: {
               )}
               {comp.variableArrayWarnings.length > 0 && (
                 <p className="text-xs text-amber-400/90">
-                  ⚠ Macro-length arrays — <code>sizeof</code> misreports these:{' '}
+                  ⚠ Macro-length arrays — length is a macro, size is unknown:{' '}
                   <span className="font-mono text-gray-400">
                     {comp.variableArrayWarnings.join(', ')}
                   </span>
@@ -198,12 +198,11 @@ export default function CompositionSection({
   target,
   onAsk,
 }: CompositionSectionProps) {
-  if (compositions.length === 0) return null;
-
   const differing = compositions.filter((c) => c.differsAcrossTargets);
   const packingSeen = compositions.some((c) => c.packAttribute !== undefined);
   const envelopes = structRoles?.envelopes ?? [];
   const candidates = structRoles?.roles.filter((r) => r.role === 'root-candidate') ?? [];
+  if (compositions.length === 0 && envelopes.length === 0 && candidates.length === 0) return null;
 
   return (
     <Accordion title="Message Composition" count={compositions.length} defaultOpen>

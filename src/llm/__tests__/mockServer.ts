@@ -85,7 +85,7 @@ export interface MockServer {
   calls: MockCall[];
   /** Queue a response for the next matching request; falls back to `onRequest`. */
   enqueue(match: string, response: Response | (() => Response)): void;
-  onRequest?: (call: MockCall) => Response;
+  onRequest?: (call: MockCall) => Response | Promise<Response>;
   restore(): void;
   lastBody(): Record<string, unknown>;
 }
@@ -119,17 +119,30 @@ export function installMockServer(): MockServer {
     };
     calls.push(call);
 
-    // Honour an abort that already happened, and one that happens later.
+    // Real fetch rejects with AbortError, not signal.reason (a TimeoutError).
     const signal = init?.signal;
-    if (signal?.aborted) throw signal.reason ?? new DOMException('aborted', 'AbortError');
+    const abortErr = () => new DOMException('The operation was aborted.', 'AbortError');
+    if (signal?.aborted) throw abortErr();
 
-    const idx = queue.findIndex((q) => url.includes(q.match));
-    if (idx !== -1) {
-      const [entry] = queue.splice(idx, 1);
-      return typeof entry.response === 'function' ? entry.response() : entry.response;
-    }
-    if (server.onRequest) return server.onRequest(call);
-    throw new TypeError('Failed to fetch');
+    const work = (async (): Promise<Response> => {
+      const idx = queue.findIndex((q) => url.includes(q.match));
+      if (idx !== -1) {
+        const [entry] = queue.splice(idx, 1);
+        return typeof entry.response === 'function' ? entry.response() : entry.response;
+      }
+      if (server.onRequest) return server.onRequest(call);
+      throw new TypeError('Failed to fetch');
+    })();
+
+    if (!signal) return work;
+    return new Promise<Response>((resolve, reject) => {
+      const onAbort = () => reject(abortErr());
+      signal.addEventListener('abort', onAbort, { once: true });
+      work.then(
+        (r) => { signal.removeEventListener('abort', onAbort); resolve(r); },
+        (e) => { signal.removeEventListener('abort', onAbort); reject(e); },
+      );
+    });
   }) as typeof fetch;
 
   return server;

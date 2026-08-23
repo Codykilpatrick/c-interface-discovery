@@ -253,6 +253,7 @@ describe('config', () => {
 
   it('defaults to disabled, so an airgapped build with no endpoint behaves as before', () => {
     expect(DEFAULT_LLM_CONFIG.enabled).toBe(false);
+    expect(DEFAULT_LLM_CONFIG.includeSourceSnippets).toBe(false);
   });
 
   it('repairs a corrupt stored config rather than producing broken requests', () => {

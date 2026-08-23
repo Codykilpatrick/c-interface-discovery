@@ -20,8 +20,8 @@ server {
 
     # LLM_BLOCK_START
     # Optional LLM proxy. docker-entrypoint.sh substitutes ${LLM_UPSTREAM} and
-    # strips this whole block when the variable is unset, so the feature
-    # self-disables and /llm/ returns 404.
+    # replaces this whole block with `return 404` when the variable is unset,
+    # so /llm/ does not fall through to index.html.
     #
     # Same-origin on purpose: the COEP require-corp header above (needed for
     # tree-sitter WASM) makes a direct cross-origin fetch to vLLM require CORS
@@ -31,6 +31,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
+        client_max_body_size 10m;
 
         # Token streaming: nginx must not buffer the SSE body, or the whole
         # answer arrives in one lump and the streaming probe warns.

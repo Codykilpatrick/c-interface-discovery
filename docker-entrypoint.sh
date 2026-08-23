@@ -16,7 +16,11 @@ if [ -n "$LLM_UPSTREAM" ]; then
     envsubst '${LLM_UPSTREAM}' < "$TEMPLATE" > "$TARGET"
 else
     echo "LLM proxy disabled (LLM_UPSTREAM not set); /llm/ will return 404"
-    sed '/# LLM_BLOCK_START/,/# LLM_BLOCK_END/d' "$TEMPLATE" > "$TARGET"
+    # Replace, don't just delete: after a delete, /llm/ falls through to
+    # try_files and returns 200 index.html.
+    sed '/# LLM_BLOCK_START/,/# LLM_BLOCK_END/c\
+    location /llm/ { return 404; }
+' "$TEMPLATE" > "$TARGET"
 fi
 
 nginx -t

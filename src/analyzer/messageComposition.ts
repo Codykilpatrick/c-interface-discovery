@@ -56,7 +56,7 @@ export interface MessageComposition {
   parts: CompositionPart[];
   /** Pointer members anywhere in the tree — not flat-serializable. */
   pointerWarnings: string[];
-  /** Variable-length arrays anywhere in the tree — `sizeof` misreports these. */
+  /** Variable-length arrays anywhere in the tree — length is a macro, size is unknown. */
   variableArrayWarnings: string[];
 }
 
@@ -103,9 +103,6 @@ function partsOf(
   for (const f of layout.fields) {
     if (f.isStructMember && f.structTypeName) {
       const childRole = roles.byName.get(f.structTypeName)?.role;
-      const edge = roles.byName
-        .get(f.structTypeName)
-        ?.containedBy.find((e) => e.parent === structName);
       const part: CompositionPart = {
         kind: 'block',
         name: f.name,
@@ -113,7 +110,7 @@ function partsOf(
         offsetBytes: base + f.offsetBytes,
         sizeBytes: f.sizeBytes,
         ...(childRole !== undefined && { role: childRole }),
-        ...(edge?.arrayLength !== undefined && { arrayLength: edge.arrayLength }),
+        ...(f.arrayLength !== undefined && { arrayLength: f.arrayLength }),
       };
       // Recurse, guarding against cycles and runaway depth.
       if (depth < maxDepth && !seen.has(f.structTypeName)) {

@@ -287,6 +287,23 @@ describe('structRoleAnalyzer — wire hazards', () => {
     expect(report.byName.get('LinkReportPkt')?.variableArrayFields).toEqual([]);
     expect(report.byName.get('FusedContact')?.variableArrayFields).toEqual([]);
   });
+
+  it('flags a multi-extent array when any extent is a macro', () => {
+    const typeDict = cicTypeDict();
+    typeDict.structs.push({
+      name: 'Grid',
+      sourceFile: 'cic/cic_types.h',
+      conditional: false,
+      fields: [{ type: 'char', name: 'cells[2][MAX]' }],
+    });
+    const report2 = analyzeStructRoles({
+      typeDict,
+      messageInterfaces: cicMessageInterfaces(typeDict),
+      payloadResolutions: [],
+      referencedInSource: cicReferencedInSource(),
+    });
+    expect(report2.byName.get('Grid')?.variableArrayFields).toEqual(['cells[2][MAX]']);
+  });
 });
 
 // ── Determinism ───────────────────────────────────────────────────────────────

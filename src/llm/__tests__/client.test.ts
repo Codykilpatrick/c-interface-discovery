@@ -334,10 +334,18 @@ describe('chat — cancellation', () => {
   });
 
   it('distinguishes a timeout from a user cancellation', async () => {
+    vi.useFakeTimers();
     server = installMockServer();
-    server.onRequest = () => {
-      throw new DOMException('timeout', 'TimeoutError');
-    };
+    server.onRequest = () => new Promise(() => {});
+    const p = chat({ ...config, timeoutMs: 1000 }, { messages: [] });
+    const assertion = expect(p).rejects.toMatchObject({ kind: 'timeout' });
+    await vi.advanceTimersByTimeAsync(1000);
+    await assertion;
+  });
+
+  it('treats a fetch AbortError with no caller signal as a timeout', async () => {
+    server = installMockServer();
+    server.onRequest = () => { throw new DOMException('The operation was aborted.', 'AbortError'); };
     await expect(chat({ ...config, timeoutMs: 1000 }, { messages: [] }))
       .rejects.toMatchObject({ kind: 'timeout' });
   });
@@ -345,10 +353,10 @@ describe('chat — cancellation', () => {
   it('aborts an in-flight request when the caller cancels', async () => {
     server = installMockServer();
     const ac = new AbortController();
-    server.onRequest = () => { throw new DOMException('aborted', 'AbortError'); };
-    setTimeout(() => ac.abort(), 0);
-    await expect(chat(config, { messages: [], signal: ac.signal }))
-      .rejects.toMatchObject({ kind: 'aborted' });
+    server.onRequest = () => new Promise(() => {});
+    const p = chat(config, { messages: [], signal: ac.signal });
+    ac.abort();
+    await expect(p).rejects.toMatchObject({ kind: 'aborted' });
   });
 
   it('clears its timeout so a slow-but-successful call is not aborted later', async () => {

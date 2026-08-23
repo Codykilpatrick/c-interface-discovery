@@ -36,25 +36,44 @@ const ENUM_QUERY = `
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Full declaration text for a struct body, so `__attribute__((packed))` is visible
- *  wherever GCC allows it — before the struct keyword, after the brace, or after
- *  the declarator. Walks up to the enclosing declaration and falls back to the
- *  struct_specifier itself. */
+/** Declaration text with the field list removed, so a packed *member* cannot
+ *  mark the parent packed. `__attribute__((packed))` is still visible before
+ *  the struct keyword, after the brace, or after the declarator. */
 function declarationText(bodyNode: Parser.SyntaxNode): string {
   let cur: Parser.SyntaxNode | null = bodyNode.parent;
   let best: Parser.SyntaxNode | null = null;
   for (let hops = 0; cur && hops < 4; hops++) {
     if (cur.type === 'struct_specifier') best = cur;
     if (cur.type === 'type_definition' || cur.type === 'declaration' || cur.type === 'field_declaration') {
-      return cur.text;
+      return stripBody(cur.text, bodyNode.text);
     }
     cur = cur.parent;
   }
-  return best?.text ?? bodyNode.text;
+  return stripBody(best?.text ?? bodyNode.text, bodyNode.text);
+}
+
+function stripBody(decl: string, body: string): string {
+  const i = decl.indexOf(body);
+  return i === -1 ? decl : decl.slice(0, i) + decl.slice(i + body.length);
 }
 
 function nodeText(node: Parser.SyntaxNode): string {
   return node.text.trim();
+}
+
+function hasPointerDeclarator(node: Parser.SyntaxNode): boolean {
+  if (node.type === 'pointer_declarator') return true;
+  return node.children.some(hasPointerDeclarator);
+}
+
+/** Keep `*` on the type. The layout engine only treats a field as a pointer if
+ *  the type contains `*` or the name starts with `*`; stripping stars from the
+ *  name and leaving `int` / `char` lays the member out as a value. */
+function fieldFromDeclarator(typeStr: string, decl: Parser.SyntaxNode): CField {
+  const raw = nodeText(decl);
+  const pointer = hasPointerDeclarator(decl) || raw.includes('*');
+  const name = raw.replace(/\*/g, '').replace(/\s+/g, ' ').trim();
+  return { type: pointer && !typeStr.includes('*') ? `${typeStr} *` : typeStr, name };
 }
 
 function extractFields(bodyNode: Parser.SyntaxNode): CField[] {
@@ -75,7 +94,7 @@ function extractFields(bodyNode: Parser.SyntaxNode): CField[] {
       const typeStr = typeNode ? nodeText(typeNode) : 'unknown';
       if (declarators.length > 0) {
         for (const decl of declarators) {
-          fields.push({ type: typeStr, name: nodeText(decl).replace(/^\*+/, '') });
+          fields.push(fieldFromDeclarator(typeStr, decl));
         }
       } else {
         // Fallback: last non-type child

@@ -89,12 +89,12 @@ describe('readTextChunks — decoding', () => {
     expect(out).toEqual([]);
   });
 
-  it('stops early when the signal is already aborted', async () => {
+  it('throws AbortError when the signal is already aborted', async () => {
     const res = sseResponseBytes([new TextEncoder().encode('data: x\n\n')]);
     const ac = new AbortController();
     ac.abort();
-    const out: string[] = [];
-    for await (const c of readTextChunks(res.body!, ac.signal)) out.push(c);
-    expect(out).toEqual([]);
+    await expect((async () => {
+      for await (const _ of readTextChunks(res.body!, ac.signal)) { /* drain */ }
+    })()).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

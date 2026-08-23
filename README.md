@@ -152,12 +152,14 @@ docker run -d -p 8080:80 \
 ```
 
 `LLM_UPSTREAM` is optional. When it is set, nginx proxies `/llm/` to that host; when it is
-unset the proxy block is stripped and `/llm/` returns 404, which the app reads as "no LLM
-available". The proxy keeps the browser same-origin, which matters because the
+unset `/llm/` returns 404, which the app reads as "no LLM available". The proxy keeps the
+browser same-origin, which matters because the
 `Cross-Origin-Embedder-Policy: require-corp` header that tree-sitter WASM needs would otherwise
 force CORS *and* CORP headers out of vLLM.
 
-`docker-compose.yml` runs app + vLLM together.
+`docker-compose.yml` runs app + vLLM together. vLLM is started with `--api-key`
+(default `cid-local`, override with `VLLM_API_KEY`) so `/llm/` is not an open GPU.
+Enter the same key in the app settings.
 
 ### Serving Gemma 4 for this app
 

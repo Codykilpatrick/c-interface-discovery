@@ -46,9 +46,12 @@ export function scanPackPragmas(content: string): PackDirective[] {
     if (head === 'pop') {
       out.push({ line: i, kind: 'pop' });
     } else if (head === 'push') {
-      // `push` alone pushes the current value; `push, N` pushes and sets N.
-      const n = parts[1] !== undefined ? Number(parts[1]) : undefined;
-      out.push({ line: i, kind: 'push', ...(isPackValue(n) && { value: n }) });
+      // `push` / `push, N` / `push, ident, N` (MSVC). The pack value is the
+      // last numeric argument, not necessarily `parts[1]`.
+      const n = parts.slice(1).map(Number).find(isPackValue);
+      out.push({ line: i, kind: 'push', ...(n !== undefined && { value: n }) });
+    } else if (head === 'show') {
+      continue;
     } else {
       const n = Number(parts[0]);
       // `#pragma pack(0)` and unparseable values reset to the default.

@@ -20,12 +20,15 @@ services:
     image: vllm/vllm-openai:latest
     # Tool calling needs the parser *and* the vendored chat template — the stock
     # HuggingFace Gemma 4 template does not emit the encoding the parser expects.
+    # --api-key keeps /llm/ from being an open GPU. Use the same value in the
+    # app's API key field. Override with VLLM_API_KEY in a .env.
     command:
       - --model=google/gemma-4-26B-A4B-it
       - --enable-auto-tool-choice
       - --tool-call-parser=gemma4
       - --reasoning-parser=gemma4
       - --chat-template=examples/tool_chat_template_gemma4.jinja
+      - --api-key=${VLLM_API_KEY:-cid-local}
     volumes:
       # Pre-staged weights; no network on an airgapped host.
       - ./models:/root/.cache/huggingface

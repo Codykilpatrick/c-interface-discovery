@@ -122,6 +122,13 @@ describe('cic integration — packing on real source', () => {
       'typedef struct { uint8_t a; uint32_t b; } PackedPragma;',
       '#pragma pack(pop)',
       'typedef struct { uint8_t a; uint32_t b; } Natural;',
+      'typedef struct { char a; int b; } Inner;',
+      'typedef struct { char x; Inner i; } __attribute__((packed)) PackedOuter;',
+      'typedef struct {',
+      '  struct Inner2 { char a; int b; } __attribute__((packed)) inner;',
+      '  int z;',
+      '} NestedPackedMember;',
+      'typedef struct { int *p; char *name[32]; } WithPtrs;',
     ].join('\n');
     packed = (await parseHeaders([{
       filename: 'packed.h', content: src, zone: 'external',
@@ -135,6 +142,36 @@ describe('cic integration — packing on real source', () => {
     expect(s.packSource).toBe('attribute');
     expect(buildStructCatalog(packed, { target: '64bit' })
       .layouts.find((l) => l.name === 'PackedAttr')!.totalSizeBytes).toBe(5);
+  });
+
+  it('does not pack a parent because a member is packed', () => {
+    const parent = packed.structs.find((x) => x.name === 'NestedPackedMember')!;
+    const inner = packed.structs.find((x) => x.name === 'Inner2')!;
+    expect(inner.packAttribute).toBe(1);
+    expect(parent.packAttribute).toBeUndefined();
+    const cat = buildStructCatalog(packed, { target: '64bit' });
+    expect(cat.layouts.find((l) => l.name === 'NestedPackedMember')!.totalSizeBytes).toBe(12);
+  });
+
+  it('keeps the child layout when the parent is packed', () => {
+    const cat = buildStructCatalog(packed, { target: '64bit' });
+    const outer = cat.layouts.find((l) => l.name === 'PackedOuter')!;
+    expect(outer.fields[1].sizeBytes).toBe(8);
+    expect(outer.fields[1].offsetBytes).toBe(1);
+    expect(outer.totalSizeBytes).toBe(9);
+  });
+
+  it('keeps pointer stars on the type so pointers are not laid out as values', () => {
+    const s = packed.structs.find((x) => x.name === 'WithPtrs')!;
+    expect(s.fields.find((f) => f.name === 'p')?.type).toMatch(/\*/);
+    expect(s.fields.find((f) => f.name.startsWith('name'))?.type).toMatch(/\*/);
+    const layout = buildStructCatalog(packed, { target: '64bit' })
+      .layouts.find((l) => l.name === 'WithPtrs')!;
+    expect(layout.fields[0].isPointer).toBe(true);
+    expect(layout.fields[0].sizeBytes).toBe(8);
+    expect(layout.fields[1].isPointer).toBe(true);
+    expect(layout.fields[1].isArray).toBe(true);
+    expect(layout.fields[1].sizeBytes).toBe(256);
   });
 
   it('picks up an enclosing #pragma pack and does not leak it past the pop', () => {

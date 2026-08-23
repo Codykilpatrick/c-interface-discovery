@@ -108,15 +108,19 @@ function isPointerField(type: string, fieldName: string): boolean {
   return type.includes('*') || fieldName.startsWith('*');
 }
 
-/** `char note[64]` is fixed; `char note[]` or `[MAX]` is not resolvable here. */
+function arrayExtents(type: string, fieldName: string): string[] {
+  return [...`${fieldName}${type}`.matchAll(/\[([^\]]*)\]/g)].map((m) => m[1].trim());
+}
+
+/** Product of every numeric extent; undefined if any extent is a macro or empty. */
 function arrayLengthOf(type: string, fieldName: string): number | undefined {
-  const m = `${fieldName}${type}`.match(/\[(\d+)\]/);
-  return m ? parseInt(m[1], 10) : undefined;
+  const extents = arrayExtents(type, fieldName);
+  if (extents.length === 0 || extents.some((e) => !/^\d+$/.test(e))) return undefined;
+  return extents.reduce((a, e) => a * parseInt(e, 10), 1);
 }
 
 function hasVariableArray(type: string, fieldName: string): boolean {
-  const combined = `${fieldName}${type}`;
-  return /\[[^\]]*\]/.test(combined) && !/\[\d+\]/.test(combined);
+  return arrayExtents(type, fieldName).some((e) => e === '' || !/^\d+$/.test(e));
 }
 
 export function analyzeStructRoles(input: StructRoleInput): StructRoleReport {

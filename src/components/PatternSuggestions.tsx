@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ApplicationGroup, CustomPattern } from '../analyzer/types';
 import { loadLlmConfig } from '../llm/config';
 import { LlmError } from '../llm/types';
@@ -29,7 +29,9 @@ export default function PatternSuggestions({
   const abortRef = useRef<AbortController | null>(null);
 
   const config = loadLlmConfig();
-  const candidateCount = gatherCandidates(apps, appId).length;
+  const candidateCount = useMemo(() => gatherCandidates(apps, appId).length, [apps, appId]);
+
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   if (!config.enabled) return null;
 
@@ -50,14 +52,17 @@ export default function PatternSuggestions({
       setRejected(r.rejected);
       setConsidered(r.candidatesConsidered);
     } catch (e) {
+      if (ac.signal.aborted) return;
       const msg = e instanceof Error ? e.message : String(e);
       // A config error here is the common first-run state; point at the fix
       // rather than leaving a bare "No model selected".
       const isConfig = e instanceof LlmError && e.kind === 'config';
       setError(isConfig ? `${msg} — set one under LLM Assistant, then run the diagnostics.` : msg);
     } finally {
-      setRunning(false);
-      abortRef.current = null;
+      if (abortRef.current === ac) {
+        abortRef.current = null;
+        setRunning(false);
+      }
     }
   }
 
@@ -78,14 +83,23 @@ export default function PatternSuggestions({
             matches nothing, or is not a valid regex, is discarded.
           </p>
         </div>
-        <button
-          className="px-3 py-1.5 text-xs bg-blue-900/60 hover:bg-blue-800/60 text-blue-200 rounded disabled:opacity-40 whitespace-nowrap"
-          onClick={run}
-          disabled={running || candidateCount === 0}
-          title={candidateCount === 0 ? 'No unclassified calls to analyse' : undefined}
-        >
-          {running ? 'Analysing…' : `✦ Suggest from ${candidateCount} call${candidateCount === 1 ? '' : 's'}`}
-        </button>
+        {running ? (
+          <button
+            className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-red-900/60 text-gray-300 rounded whitespace-nowrap"
+            onClick={() => abortRef.current?.abort()}
+          >
+            Stop
+          </button>
+        ) : (
+          <button
+            className="px-3 py-1.5 text-xs bg-blue-900/60 hover:bg-blue-800/60 text-blue-200 rounded disabled:opacity-40 whitespace-nowrap"
+            onClick={run}
+            disabled={candidateCount === 0}
+            title={candidateCount === 0 ? 'No unclassified calls to analyse' : undefined}
+          >
+            ✦ Suggest from {candidateCount} call{candidateCount === 1 ? '' : 's'}
+          </button>
+        )}
       </div>
 
       {error && (

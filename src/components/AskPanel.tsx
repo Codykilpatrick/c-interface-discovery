@@ -18,6 +18,7 @@ export interface AskPanelProps {
 }
 
 interface Turn {
+  id: number;
   question: string;
   answer: string;
   reasoning: string;
@@ -103,7 +104,13 @@ export default function AskPanel({
   const [constant, setConstant] = useState<string | null>(initialConstant ?? null);
   const [showContext, setShowContext] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const turnIdRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  function abortInFlight() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }
 
   const analyzed = useMemo(() => apps.filter((a) => a.analysis !== null), [apps]);
 
@@ -123,7 +130,10 @@ export default function AskPanel({
     }
   }, [initialConstant]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => abortInFlight(), []);
+  useEffect(() => {
+    if (!open) abortInFlight();
+  }, [open]);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [turns]);
@@ -154,7 +164,7 @@ export default function AskPanel({
 
     // Prior turns as history, so a follow-up does not restate the digest.
     const history: ChatMessage[] = turns.flatMap((t) =>
-      t.error || !t.answer
+      t.error || t.running || !t.answer
         ? []
         : [
             { role: 'user' as const, content: t.question },
@@ -162,14 +172,14 @@ export default function AskPanel({
           ],
     );
 
-    const index = turns.length;
-    setTurns((prev) => [...prev, { question: q, answer: '', reasoning: '', trace: [], running: true }]);
+    const id = ++turnIdRef.current;
+    setTurns((prev) => [...prev, { id, question: q, answer: '', reasoning: '', trace: [], running: true }]);
 
     const ac = new AbortController();
     abortRef.current = ac;
 
     const patch = (fn: (t: Turn) => Turn) =>
-      setTurns((prev) => prev.map((t, i) => (i === index ? fn(t) : t)));
+      setTurns((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
 
     try {
       for await (const ev of ask({ question: q, apps, scope, config, history, signal: ac.signal })) {
@@ -184,7 +194,7 @@ export default function AskPanel({
       }
     } finally {
       patch((t) => ({ ...t, running: false }));
-      abortRef.current = null;
+      if (abortRef.current === ac) abortRef.current = null;
     }
   }, [apps, config, running, scope, turns]);
 
@@ -197,7 +207,7 @@ export default function AskPanel({
         <h2 className="text-sm font-semibold text-gray-200">Ask</h2>
         <div className="flex items-center gap-2">
           {turns.length > 0 && (
-            <button className="text-xs text-gray-600 hover:text-gray-400" onClick={() => setTurns([])}>
+            <button className="text-xs text-gray-600 hover:text-gray-400" onClick={() => { abortInFlight(); setTurns([]); }}>
               Clear
             </button>
           )}
@@ -273,8 +283,8 @@ export default function AskPanel({
               </div>
             )}
 
-            {turns.map((t, i) => (
-              <div key={i} className="space-y-2">
+            {turns.map((t) => (
+              <div key={t.id} className="space-y-2">
                 <div className="text-sm text-blue-300 font-medium">{t.question}</div>
 
                 {t.digest && (

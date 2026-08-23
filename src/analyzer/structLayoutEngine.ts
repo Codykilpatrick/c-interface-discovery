@@ -104,6 +104,7 @@ const PRIM64: Record<string, [number, number]> = {
   'long long':          [8, 8], 'signed long long': [8, 8], 'unsigned long long': [8, 8],
   'long long int':      [8, 8], 'unsigned long long int': [8, 8],
   'long double':        [16, 16],
+  'double':             [8, 8],
   'size_t':             [8, 8], 'ssize_t':       [8, 8],
   'ptrdiff_t':          [8, 8], 'intptr_t':      [8, 8], 'uintptr_t':     [8, 8],
   'uint64_t':           [8, 8], 'int64_t':       [8, 8],
@@ -244,16 +245,21 @@ function parseFieldType(rawType: string, rawName: string): ParsedFieldType {
   }
 
   // Array: look for [N] in name (e.g. `char name[32]`) or in type. Multiply every
-  // extent so `char grid[2][3]` counts 6 elements, not 2.
-  const extents = [...(rawName + base).matchAll(/\[(\d+)\]/g)].map((m) => parseInt(m[1], 10));
+  // numeric extent so `char grid[2][3]` counts 6 elements, not 2. A non-numeric
+  // extent (`[CIC_MAX_TRACKS]`, `[]`) is an array of unknown length.
+  const extents = [...(rawName + base).matchAll(/\[([^\]]*)\]/g)].map((m) => m[1].trim());
   if (extents.length > 0) {
     isArray = true;
-    arrayLength = extents.reduce((a, b) => a * b, 1);
-    base = base.replace(/\[\d+\]/g, '').trim();
+    if (extents.every((e) => /^\d+$/.test(e))) {
+      arrayLength = extents.reduce((a, e) => a * parseInt(e, 10), 1);
+    }
+    base = base.replace(/\[[^\]]*\]/g, '').trim();
   }
 
-  // Strip struct/union/enum keywords
-  base = base.replace(/^(struct|union|enum)\s+/, '').trim();
+  // `struct Inner2 { ... } inner` — the type node is the whole specifier.
+  // Keep the tag name so we resolve Inner2 instead of treating it as unknown.
+  const tagged = base.match(/^(struct|union|enum)\s+(\w+)/);
+  base = tagged ? tagged[2] : base;
 
   return { baseType: base, isPointer, isArray, arrayLength, isBitfield, bitWidth };
 }
@@ -332,8 +338,9 @@ function computeLayoutInternal(
         if (nestedStruct && !RECURSION_GUARD.has(nestedStruct.name)) {
           RECURSION_GUARD.add(nestedStruct.name);
           try {
-            // A packed parent propagates its packing into nested members.
-            const nestedPack = Math.min(packValue, nestedStruct.packAttribute ?? packValue);
+            // GCC/Clang keep the inner type's own layout. Packing on the parent
+            // only caps how this member is *placed*, not how the child is laid out.
+            const nestedPack = nestedStruct.packAttribute ?? (opts.target === '64bit' ? 8 : 4);
             const nested = computeLayoutInternal(nestedStruct, typeDict, typedefMap, opts, nestedPack);
             fieldSize = nested.totalSizeBytes;
             fieldAlign = nested.alignBytes;
@@ -382,6 +389,7 @@ function computeLayoutInternal(
     structAlign = Math.max(structAlign, effectiveAlign);
 
     const elementSize = fieldSize;
+    if (isArray && arrayLength === undefined) isEstimated = true;
     const totalSize = isArray ? elementSize * (arrayLength ?? 1) : elementSize;
 
     fieldLayouts.push({

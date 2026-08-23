@@ -18,6 +18,7 @@ import type { ApplicationGroup, LoadedFile, StringAnalysis } from '../analyzer/t
 import { summarizeComposition } from '../analyzer/messageComposition';
 import { findReferences } from '../utils/findReferences';
 import { escapeRegExp } from '../utils/escapeRegExp';
+import { regexTooDangerous } from '../utils/regexSafety';
 import type { ToolDefinition } from './types';
 
 export interface ToolContext {
@@ -537,6 +538,7 @@ const EXECUTORS: Record<string, Executor> = {
 
     let re: RegExp;
     try {
+      if (regexTooDangerous(pattern)) throw new Error('unsafe');
       re = new RegExp(pattern, 'i');
     } catch {
       // Fall back to a literal substring rather than failing the turn.

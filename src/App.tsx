@@ -1238,10 +1238,10 @@ function DrillDownView({
             <HeaderGenBundlePanel process={app.name} bundle={analysis.headerGenBundle} onExport={onExportHeaderGen} />
           )}
 
-          {analysis.messageCompositions && analysis.messageCompositions.length > 0 && (
+          {(analysis.structRoles || (analysis.messageCompositions && analysis.messageCompositions.length > 0)) && (
             <div className="mb-4">
               <CompositionSection
-                compositions={analysis.messageCompositions}
+                compositions={analysis.messageCompositions ?? []}
                 structRoles={analysis.structRoles}
                 target={analysis.layoutTarget ?? '64bit'}
                 onAsk={onAskAboutMessage}

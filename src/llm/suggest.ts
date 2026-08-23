@@ -21,6 +21,7 @@ import { chat } from './client';
 import type { LlmConfig } from './config';
 import { sourceFilesOf } from './tools';
 import { escapeRegExp } from '../utils/escapeRegExp';
+import { regexTooDangerous } from '../utils/regexSafety';
 import { LlmError } from './types';
 import type { JsonSchemaFormat } from './types';
 
@@ -193,6 +194,9 @@ export function verifySuggestion(
 
   if (name === '' || patternStr === '') return reject('Missing name or pattern');
 
+  const danger = regexTooDangerous(patternStr);
+  if (danger) return reject(danger);
+
   let re: RegExp;
   try {
     re = new RegExp(patternStr);
@@ -208,13 +212,18 @@ export function verifySuggestion(
     return reject('Already in the pattern registry');
   }
 
-  // Run it. Cap the sample list but count every match.
+  // Run it. Cap the sample list but count every match. Bound wall time so a
+  // still-expensive pattern cannot freeze the tab.
   const samples: VerifiedSuggestion['samples'] = [];
   let matchCount = 0;
   const matchedFiles = new Set<string>();
+  const started = Date.now();
   for (const f of sources) {
     const lines = f.content.split('\n');
     for (let i = 0; i < lines.length; i++) {
+      if (i % 200 === 0 && Date.now() - started > 500) {
+        return reject('Pattern took too long to run');
+      }
       if (!re.test(lines[i])) continue;
       matchCount++;
       matchedFiles.add(f.filename);
@@ -275,6 +284,7 @@ export function verifySuggestion(
 }
 
 function isValidRegex(s: string): boolean {
+  if (regexTooDangerous(s)) return false;
   try {
     new RegExp(s);
     return true;

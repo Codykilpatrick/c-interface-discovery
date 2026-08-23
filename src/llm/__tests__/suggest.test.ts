@@ -93,6 +93,20 @@ describe('verifySuggestion — rejects what must never be shown', () => {
     expect(v.rejected.reason).toContain('Already in the pattern registry');
   });
 
+  it('rejects a nested-quantifier pattern rather than running it on the corpus', () => {
+    const v = verifySuggestion({ ...good, pattern: '(a+)+b' }, CORPUS, []);
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.rejected.reason).toContain('nested quantifiers');
+  });
+
+  it('rejects a pattern longer than 200 characters', () => {
+    const v = verifySuggestion({ ...good, pattern: `${'a'.repeat(201)}\\s*\\(` }, CORPUS, []);
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.rejected.reason).toContain('too long');
+  });
+
   it('rejects a proposal missing a name or pattern', () => {
     expect(verifySuggestion({ pattern: 'x' }, CORPUS, []).ok).toBe(false);
     expect(verifySuggestion({ name: 'x' }, CORPUS, []).ok).toBe(false);

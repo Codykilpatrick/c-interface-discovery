@@ -48,6 +48,18 @@ describe('packDetection — #pragma pack scanning', () => {
     ]);
   });
 
+  it('reads the numeric value from #pragma pack(push, ident, N)', () => {
+    expect(scanPackPragmas('#pragma pack(push, r1, 2)')).toEqual([
+      { line: 0, kind: 'push', value: 2 },
+    ]);
+  });
+
+  it('ignores #pragma pack(show)', () => {
+    expect(scanPackPragmas('#pragma pack(1)\n#pragma pack(show)\nstruct S { int a; };')).toEqual([
+      { line: 0, kind: 'set', value: 1 },
+    ]);
+  });
+
   it('tolerates whitespace variants', () => {
     const src = '  #  pragma   pack ( 4 )';
     expect(scanPackPragmas(src)).toEqual([{ line: 0, kind: 'set', value: 4 }]);

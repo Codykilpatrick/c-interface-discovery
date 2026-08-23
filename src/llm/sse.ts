@@ -68,7 +68,10 @@ export async function* readTextChunks(
   const decoder = new TextDecoder('utf-8');
   try {
     for (;;) {
-      if (signal?.aborted) return;
+      if (signal?.aborted) {
+        await reader.cancel().catch(() => undefined);
+        throw new DOMException('The operation was aborted.', 'AbortError');
+      }
       const { done, value } = await reader.read();
       if (done) break;
       if (value) yield decoder.decode(value, { stream: true });

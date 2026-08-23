@@ -44,6 +44,7 @@ export default function LlmSettings({ onConfigChange }: LlmSettingsProps) {
   const [report, setReport] = useState<DiagnosticsReport | null>(null);
   const [connError, setConnError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const probeGen = useRef(0);
 
   const update = useCallback((patch: Partial<LlmConfig>) => {
     setConfig((prev) => {
@@ -78,13 +79,15 @@ export default function LlmSettings({ onConfigChange }: LlmSettingsProps) {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
+    const gen = ++probeGen.current;
     setProbeStatus('running');
     setLiveResults([]);
     setReport(null);
     const result = await runDiagnostics(config, {
       signal: ac.signal,
-      onProgress: (r) => setLiveResults((prev) => [...prev, r]),
+      onProgress: (r) => { if (gen === probeGen.current) setLiveResults((prev) => [...prev, r]); },
     });
+    if (gen !== probeGen.current) return;
     setReport(result);
     setModels(result.models);
     setProbeStatus('done');
@@ -199,6 +202,24 @@ export default function LlmSettings({ onConfigChange }: LlmSettingsProps) {
                 className="w-full"
                 value={config.temperature}
                 onChange={(e) => update({ temperature: Number(e.target.value) })}
+              />
+            </Field>
+
+            <Field label={`Max tokens — ${config.maxTokens}`} hint="Thinking tokens count against this.">
+              <input
+                type="range" min="256" max="8192" step="256"
+                className="w-full"
+                value={config.maxTokens}
+                onChange={(e) => update({ maxTokens: Number(e.target.value) })}
+              />
+            </Field>
+
+            <Field label={`Timeout — ${Math.round(config.timeoutMs / 1000)}s`} hint="A stall longer than this is a timeout, not a cancel.">
+              <input
+                type="range" min="15" max="300" step="15"
+                className="w-full"
+                value={Math.round(config.timeoutMs / 1000)}
+                onChange={(e) => update({ timeoutMs: Number(e.target.value) * 1000 })}
               />
             </Field>
 

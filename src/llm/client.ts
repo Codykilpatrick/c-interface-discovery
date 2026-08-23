@@ -67,8 +67,10 @@ function withTimeout(timeoutMs: number, external?: AbortSignal) {
 function classifyAbort(e: unknown, external?: AbortSignal): LlmError {
   if (external?.aborted) return new LlmError('Request cancelled', 'aborted');
   const name = (e as { name?: string })?.name;
-  if (name === 'TimeoutError') return new LlmError('Request timed out', 'timeout');
-  if (name === 'AbortError') return new LlmError('Request cancelled', 'aborted');
+  // fetch rejects with AbortError even when the abort reason was a timeout.
+  if (name === 'AbortError' || name === 'TimeoutError') {
+    return new LlmError('Request timed out', 'timeout');
+  }
   return new LlmError(String((e as Error)?.message ?? e), 'network');
 }
 
@@ -299,10 +301,9 @@ export async function* chatStream(
         yield ev;
       }
     }
-    // A stream that ends without [DONE] or a finish_reason was truncated —
-    // usually a proxy timeout. Say so rather than presenting a partial answer
-    // as complete.
     if (!sawDone) {
+      if (opts.signal?.aborted) throw new LlmError('Request cancelled', 'aborted');
+      if (signal.aborted) throw new LlmError('Request timed out', 'timeout');
       throw new LlmError(
         'Stream ended without a completion marker — the response may be truncated',
         'protocol',
