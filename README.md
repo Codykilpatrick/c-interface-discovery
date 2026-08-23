@@ -1,6 +1,6 @@
 # C Interface Discovery
 
-A static analysis web application for mapping messaging interfaces in legacy C submarine combat system codebases. Runs 100% in the browser — zero network calls, zero backend. Deployable as a Docker container for airgapped environments.
+A static analysis web application for mapping messaging interfaces in legacy C submarine combat system codebases. Runs entirely in the browser — zero internet access, zero backend. Deployable as a Docker container for airgapped environments. An **optional** LLM assistant can connect to a self-hosted inference server on the same isolated network; with it disabled (the default) nothing makes a network request.
 
 ## What it does
 
@@ -135,6 +135,92 @@ The original three: load array + WCS + broker. The graph should show sensor arra
 Expected graph: Sonar → CIC → Fire Control for tracks, Sonar → CIC for contacts, Nav → CIC for own-ship, Fire Control → CIC for engage.
 
 Contact payloads nest six app structs (`ContactMsg` → `FusedContact` → `TrackKinematics` → `MotionState` → `DepthFix` → `GeoCoord` → `CicTime`) and then system types from the fake include tree (`timeval` / `__time_t` in `sys/time.h` and `bits/types.h`, `sockaddr_in` / `in_addr` in `netinet/in.h`).
+
+## Optional LLM assistant
+
+Disabled by default. When enabled, the app can query a **self-hosted Gemma 4 model served by
+vLLM** on the same airgapped network — no internet access is involved. Analysis never depends
+on it: with the feature off, or the endpoint unreachable, every existing code path behaves
+exactly as before.
+
+### Run the app with the LLM proxy
+
+```bash
+docker run -d -p 8080:80 \
+  -e LLM_UPSTREAM=vllm-host:8000 \
+  --name cid c-interface-discovery:2.1.0
+```
+
+`LLM_UPSTREAM` is optional. When it is set, nginx proxies `/llm/` to that host; when it is
+unset `/llm/` returns 404, which the app reads as "no LLM available". The proxy keeps the
+browser same-origin, which matters because the
+`Cross-Origin-Embedder-Policy: require-corp` header that tree-sitter WASM needs would otherwise
+force CORS *and* CORP headers out of vLLM.
+
+`docker-compose.yml` runs app + vLLM together. vLLM is started with `--api-key`
+(default `cid-local`, override with `VLLM_API_KEY`) so `/llm/` is not an open GPU.
+Enter the same key in the app settings.
+
+### Serving Gemma 4 for this app
+
+```bash
+vllm serve google/gemma-4-26B-A4B-it \
+  --enable-auto-tool-choice \
+  --tool-call-parser gemma4 \
+  --reasoning-parser gemma4 \
+  --chat-template examples/tool_chat_template_gemma4.jinja
+```
+
+The chat template is not optional — the stock HuggingFace Gemma 4 template does not emit the
+tool-definition encoding the `gemma4` parser expects.
+
+### Asking questions
+
+With the assistant enabled, an **✦ Ask** button appears in the header. The panel scopes to one
+application, all of them, or a single message, and answers are grounded in analyzer output:
+
+- The prompt carries a **tiered digest** of the analysis — message table with composition and
+  both target sizes, struct stubs, unresolved items, unmatched calls. Struct *bodies* are not in
+  the prompt; they arrive through a tool call when a question needs them.
+- The model reaches the rest through **10 read-only tools** (`getStructLayout`,
+  `getStructGraph`, `findUsages`, `getPayloadResolutions`, `getSourceLines`, …). Every one is
+  deterministic TypeScript over the in-memory analysis — the model never computes an offset.
+- The **tool-call trace** shows exactly which analyzer facts an answer was built from, and
+  **what was sent?** expands the full digest.
+- Citations like `router.c:142` are clickable and drill into the file view.
+- When the digest cannot fit, omissions are recorded, shown in the UI, and stated in the prompt
+  so the model knows to use a tool rather than assume something does not exist.
+
+### Suggesting custom patterns
+
+The registry's blind spot is project-specific messaging wrappers. With the assistant on,
+**✦ Suggest from N calls** appears above the pattern registry: it hands the model the
+frequency-ranked unclassified calls with real call sites, and asks which are transport wrappers.
+
+Nothing the model proposes is displayed until it has been **compiled and run against the loaded
+source**. A proposal that is not a valid regex, matches nothing, matches the empty string, or
+duplicates an existing entry is discarded — you see the match count and real matching lines
+before deciding. Accept routes through the normal registry and triggers a re-analysis.
+
+The model writes a hypothesis; the analyzer decides whether it survives.
+
+### Verify after transfer
+
+Open **LLM Assistant → Run diagnostics**. It probes each capability the assistant needs —
+reachability, non-streaming completion, SSE streaming, tool calling, structured output,
+reasoning split — and prints what failed and what to change. **↓ Save report** writes a text
+file you can carry off the host. This is the acceptance test for a new deployment.
+
+> Leave **Stream tool-call turns** off. vLLM's `gemma4` tool parser has open streaming defects
+> ([#42696](https://github.com/vllm-project/vllm/issues/42696),
+> [#44522](https://github.com/vllm-project/vllm/issues/44522)) reported at 21–35% success
+> streaming versus 100% non-streaming. The app streams the final answer with `tool_choice:
+> none`, which never exercises that path.
+
+## Design docs
+
+- [`docs/payload-resolution-patterns.md`](docs/payload-resolution-patterns.md) — how the payload resolver infers struct types at send sites
+- [`docs/llm-integration-plan.md`](docs/llm-integration-plan.md) — design rationale for the optional LLM assistant: model assumptions and the measured context strategy
 
 ## Known limitations
 

@@ -1,4 +1,5 @@
 import type { CStruct, TypeDict } from './types';
+import type { PackSource } from './packDetection';
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
@@ -12,6 +13,28 @@ export interface CFieldLayout {
   isPointer: boolean;
   isArray: boolean;
   arrayLength?: number;
+  /** True when this field's type resolved to a struct in the type dictionary. */
+  isStructMember?: boolean;
+  /** Canonical struct type name, when `isStructMember`. */
+  structTypeName?: string;
+}
+
+/** Why a run of padding bytes exists, and what forced it. */
+export interface PaddingGap {
+  /** Field the gap follows; null for leading padding. */
+  afterField: string | null;
+  /** Field the gap precedes; null for tail padding. */
+  beforeField: string | null;
+  offsetBytes: number;
+  sizeBytes: number;
+  reason: 'align-member' | 'align-struct-tail';
+  /** The alignment requirement that forced the gap. */
+  causedByAlign: number;
+  /** The type imposing that alignment. Null for tail padding (the struct's own). */
+  causedByType: string | null;
+  /** True when both neighbours are embedded structs rather than scalars — a gap
+   *  *between two blocks*, as distinct from ordinary intra-struct slack. */
+  atCompositionBoundary: boolean;
 }
 
 export interface CStructLayout {
@@ -19,11 +42,27 @@ export interface CStructLayout {
   fields: CFieldLayout[];
   totalSizeBytes: number;
   alignBytes: number;
+  /** Sum of every gap in `paddingGaps`. Kept for compatibility. */
   paddingBytes: number;
+  /** Located, attributed padding. Empty when the struct has no gaps. */
+  paddingGaps: PaddingGap[];
   packAttribute?: number;
+  packSource?: PackSource;
   isEstimated: boolean;
   sourceFile: string;
   typedefAliases: string[];
+}
+
+/** Per-struct comparison between the two layout targets. */
+export interface LayoutDiff {
+  name: string;
+  size32: number;
+  size64: number;
+  padding32: number;
+  padding64: number;
+  differs: boolean;
+  /** Fields whose offset moves between targets. */
+  movedFields: { name: string; offset32: number; offset64: number }[];
 }
 
 export interface StructCatalog {
@@ -65,6 +104,7 @@ const PRIM64: Record<string, [number, number]> = {
   'long long':          [8, 8], 'signed long long': [8, 8], 'unsigned long long': [8, 8],
   'long long int':      [8, 8], 'unsigned long long int': [8, 8],
   'long double':        [16, 16],
+  'double':             [8, 8],
   'size_t':             [8, 8], 'ssize_t':       [8, 8],
   'ptrdiff_t':          [8, 8], 'intptr_t':      [8, 8], 'uintptr_t':     [8, 8],
   'uint64_t':           [8, 8], 'int64_t':       [8, 8],
@@ -102,16 +142,12 @@ function primitiveSizeAlign(
   return table[key] ?? table[typeName.toLowerCase()] ?? null;
 }
 
-/** Detect `__attribute__((packed))` or `__packed__` on a struct's raw source. */
-function detectPackAttribute(struct: CStruct, typeDict: TypeDict): number | undefined {
-  // We don't have the raw text easily, but we can check if the struct was
-  // derived from any field patterns that suggest packing. For now we return
-  // undefined (no packing detected), since we rely on CStruct.fields which
-  // already have type info but not the raw attribute text.
-  // This is a best-effort implementation; actual packed detection requires
-  // the raw source text which isn't stored on CStruct.
-  void struct; void typeDict;
-  return undefined;
+/**
+ * Read packing detected at parse time by `packDetection.ts` (`__attribute__((packed))`
+ * or an enclosing `#pragma pack(N)`), recorded on the struct by `headerParser`.
+ */
+function detectPackAttribute(struct: CStruct): number | undefined {
+  return struct.packAttribute;
 }
 
 // ── Typedef resolution ────────────────────────────────────────────────────────
@@ -138,6 +174,31 @@ function buildTypedefMap(typeDict: TypeDict): Map<string, string> {
     }
   }
   return map;
+}
+
+/**
+ * Follow a typedef chain looking for a primitive. System headers alias several
+ * levels deep (`time_t` → `__time_t` → `long`), and without this the type falls
+ * through to the unknown-type branch and silently takes pointer size.
+ */
+function chaseAliasToPrimitive(
+  typeName: string,
+  typeDict: TypeDict,
+  target: '32bit' | '64bit',
+): [number, number] | null {
+  const aliases = typeDict.typedefAliases;
+  if (!aliases) return null;
+  let name = typeName;
+  for (let hops = 0; hops < 6; hops++) {
+    const next = aliases[name];
+    if (!next || next === name) return null;
+    // A chain that lands on a struct is not our business — the caller resolves it.
+    if (typeDict.structs.some((s) => s.name === next)) return null;
+    const prim = primitiveSizeAlign(next, target);
+    if (prim) return prim;
+    name = next;
+  }
+  return null;
 }
 
 /** Resolve a type name through typedef aliases to find a struct. */
@@ -183,16 +244,22 @@ function parseFieldType(rawType: string, rawName: string): ParsedFieldType {
     base = base.replace(/:\s*\d+\s*$/, '').trim();
   }
 
-  // Array: look for [N] in name (e.g. `char name[32]`) or in type
-  const arrayMatch = (rawName + base).match(/\[(\d+)\]/);
-  if (arrayMatch) {
+  // Array: look for [N] in name (e.g. `char name[32]`) or in type. Multiply every
+  // numeric extent so `char grid[2][3]` counts 6 elements, not 2. A non-numeric
+  // extent (`[CIC_MAX_TRACKS]`, `[]`) is an array of unknown length.
+  const extents = [...(rawName + base).matchAll(/\[([^\]]*)\]/g)].map((m) => m[1].trim());
+  if (extents.length > 0) {
     isArray = true;
-    arrayLength = parseInt(arrayMatch[1], 10);
-    base = base.replace(/\[\d+\]/g, '').trim();
+    if (extents.every((e) => /^\d+$/.test(e))) {
+      arrayLength = extents.reduce((a, e) => a * parseInt(e, 10), 1);
+    }
+    base = base.replace(/\[[^\]]*\]/g, '').trim();
   }
 
-  // Strip struct/union/enum keywords
-  base = base.replace(/^(struct|union|enum)\s+/, '').trim();
+  // `struct Inner2 { ... } inner` — the type node is the whole specifier.
+  // Keep the tag name so we resolve Inner2 instead of treating it as unknown.
+  const tagged = base.match(/^(struct|union|enum)\s+(\w+)/);
+  base = tagged ? tagged[2] : base;
 
   return { baseType: base, isPointer, isArray, arrayLength, isBitfield, bitWidth };
 }
@@ -207,15 +274,39 @@ function computeLayoutInternal(
   typedefMap: Map<string, string>,
   opts: LayoutOptions,
   packValue: number,
-): Omit<CStructLayout, 'name' | 'sourceFile' | 'typedefAliases' | 'packAttribute'> {
+): Omit<CStructLayout, 'name' | 'sourceFile' | 'typedefAliases' | 'packAttribute' | 'packSource'> {
   const ptrSize = pointerSize(opts.target);
   const ptrAlign = pointerAlign(opts.target);
 
   const fieldLayouts: CFieldLayout[] = [];
+  const paddingGaps: PaddingGap[] = [];
   let offset = 0;
   let structAlign = 1;
   let isEstimated = false;
   let internalPaddingBytes = 0;
+
+  /** Record a gap, attributing it to the member whose alignment forced it. */
+  function recordGap(
+    from: number,
+    to: number,
+    beforeField: string,
+    causedByAlign: number,
+    causedByType: string | null,
+    nextIsStruct: boolean,
+  ) {
+    if (to <= from) return;
+    const prev = fieldLayouts[fieldLayouts.length - 1];
+    paddingGaps.push({
+      afterField: prev?.name ?? null,
+      beforeField,
+      offsetBytes: from,
+      sizeBytes: to - from,
+      reason: 'align-member',
+      causedByAlign,
+      causedByType,
+      atCompositionBoundary: Boolean(prev?.isStructMember) && nextIsStruct,
+    });
+  }
 
   for (const field of struct.fields) {
     const parsed = parseFieldType(field.type, field.name);
@@ -223,13 +314,22 @@ function computeLayoutInternal(
 
     let fieldSize: number;
     let fieldAlign: number;
+    let structTypeName: string | undefined;
 
     if (isPointer) {
+      // A pointer is a machine word regardless of what it points at, so a
+      // pointer to a struct is *not* a composition boundary — and it means the
+      // struct is not flat-serializable.
       fieldSize = ptrSize;
       fieldAlign = ptrAlign;
     } else {
-      // Try primitives first
-      const prim = primitiveSizeAlign(baseType, opts.target);
+      // Try primitives first, then chase typedef chains to a primitive.
+      // System headers alias heavily (`time_t` → `__time_t` → `long`), and a
+      // missed chain silently substitutes pointer size — which would make every
+      // offset below it wrong.
+      const prim =
+        primitiveSizeAlign(baseType, opts.target) ??
+        chaseAliasToPrimitive(baseType, typeDict, opts.target);
       if (prim) {
         [fieldSize, fieldAlign] = prim;
       } else {
@@ -238,9 +338,13 @@ function computeLayoutInternal(
         if (nestedStruct && !RECURSION_GUARD.has(nestedStruct.name)) {
           RECURSION_GUARD.add(nestedStruct.name);
           try {
-            const nested = computeLayoutInternal(nestedStruct, typeDict, typedefMap, opts, packValue);
+            // GCC/Clang keep the inner type's own layout. Packing on the parent
+            // only caps how this member is *placed*, not how the child is laid out.
+            const nestedPack = nestedStruct.packAttribute ?? (opts.target === '64bit' ? 8 : 4);
+            const nested = computeLayoutInternal(nestedStruct, typeDict, typedefMap, opts, nestedPack);
             fieldSize = nested.totalSizeBytes;
             fieldAlign = nested.alignBytes;
+            structTypeName = nestedStruct.name;
             if (nested.isEstimated) isEstimated = true;
           } finally {
             RECURSION_GUARD.delete(nestedStruct.name);
@@ -259,6 +363,7 @@ function computeLayoutInternal(
       const bitContainer = fieldSize;
       const effectiveAlign = Math.min(fieldAlign, packValue);
       const aligned = alignUp(offset, effectiveAlign);
+      recordGap(offset, aligned, field.name, effectiveAlign, field.type, false);
       internalPaddingBytes += aligned - offset;
       offset = aligned;
       fieldLayouts.push({
@@ -278,11 +383,13 @@ function computeLayoutInternal(
 
     const effectiveAlign = Math.min(fieldAlign, packValue);
     const aligned = alignUp(offset, effectiveAlign);
+    recordGap(offset, aligned, field.name, effectiveAlign, structTypeName ?? baseType, structTypeName !== undefined);
     internalPaddingBytes += aligned - offset;
     offset = aligned;
     structAlign = Math.max(structAlign, effectiveAlign);
 
     const elementSize = fieldSize;
+    if (isArray && arrayLength === undefined) isEstimated = true;
     const totalSize = isArray ? elementSize * (arrayLength ?? 1) : elementSize;
 
     fieldLayouts.push({
@@ -294,6 +401,7 @@ function computeLayoutInternal(
       isPointer,
       isArray,
       ...(arrayLength !== undefined && { arrayLength }),
+      ...(structTypeName !== undefined && { isStructMember: true, structTypeName }),
     });
 
     offset += totalSize;
@@ -301,10 +409,29 @@ function computeLayoutInternal(
 
   // Final struct size is padded to struct alignment
   const totalSizeBytes = alignUp(offset, structAlign);
+  if (totalSizeBytes > offset) {
+    paddingGaps.push({
+      afterField: fieldLayouts[fieldLayouts.length - 1]?.name ?? null,
+      beforeField: null,
+      offsetBytes: offset,
+      sizeBytes: totalSizeBytes - offset,
+      reason: 'align-struct-tail',
+      causedByAlign: structAlign,
+      causedByType: null,
+      atCompositionBoundary: false,
+    });
+  }
   // paddingBytes = internal gaps + tail padding
   const paddingBytes = internalPaddingBytes + (totalSizeBytes - offset);
 
-  return { fields: fieldLayouts, totalSizeBytes, alignBytes: structAlign, paddingBytes, isEstimated };
+  return {
+    fields: fieldLayouts,
+    totalSizeBytes,
+    alignBytes: structAlign,
+    paddingBytes,
+    paddingGaps,
+    isEstimated,
+  };
 }
 
 /** Compute the memory layout of a single struct. */
@@ -314,7 +441,7 @@ export function computeLayout(
   opts: LayoutOptions,
 ): CStructLayout {
   const typedefMap = buildTypedefMap(typeDict);
-  const packAttr = detectPackAttribute(struct, typeDict);
+  const packAttr = detectPackAttribute(struct);
   const packValue = opts.packOverride ?? packAttr ?? (opts.target === '64bit' ? 8 : 4);
 
   RECURSION_GUARD.clear();
@@ -326,6 +453,7 @@ export function computeLayout(
     name: struct.name,
     ...result,
     packAttribute: packAttr,
+    ...(struct.packSource !== undefined && { packSource: struct.packSource }),
     sourceFile: struct.sourceFile,
     typedefAliases: [],
   };
@@ -342,7 +470,7 @@ export function buildStructCatalog(
   for (const struct of typeDict.structs) {
     if (struct.fields.length === 0) continue; // skip opaque/forward-declared structs
 
-    const packAttr = detectPackAttribute(struct, typeDict);
+    const packAttr = detectPackAttribute(struct);
     const packValue = opts.packOverride ?? packAttr ?? (opts.target === '64bit' ? 8 : 4);
 
     RECURSION_GUARD.clear();
@@ -354,6 +482,7 @@ export function buildStructCatalog(
       name: struct.name,
       ...result,
       packAttribute: packAttr,
+      ...(struct.packSource !== undefined && { packSource: struct.packSource }),
       sourceFile: struct.sourceFile,
       typedefAliases: [],
     });

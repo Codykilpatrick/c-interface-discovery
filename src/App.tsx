@@ -34,6 +34,12 @@ import ExternsSection from './components/sections/ExternsSection';
 import DefinesSection from './components/sections/DefinesSection';
 import UnknownsSection from './components/sections/UnknownsSection';
 import RiskSection from './components/sections/RiskSection';
+import CompositionSection from './components/sections/CompositionSection';
+import LlmSettings from './components/LlmSettings';
+import AskPanel from './components/AskPanel';
+import PatternSuggestions from './components/PatternSuggestions';
+import { loadLlmConfig, type LlmConfig } from './llm/config';
+import { summarizeComposition } from './analyzer/messageComposition';
 
 function genId(): string {
   return Math.random().toString(36).slice(2, 11);
@@ -69,6 +75,12 @@ export default function App() {
   const [matchCounts, setMatchCounts] = useState<Map<string, number>>(new Map());
   const [msgStructMatchCounts, setMsgStructMatchCounts] = useState<Map<string, number>>(new Map());
   const [patternPrefill, setPatternPrefill] = useState<string | undefined>();
+  const [askOpen, setAskOpen] = useState(false);
+  // Held in state, not read per render: the settings panel writes to
+  // localStorage, and without lifting it the Ask button would not appear until
+  // some unrelated change forced a re-render.
+  const [llmConfig, setLlmConfig] = useState<LlmConfig>(() => loadLlmConfig());
+  const [askConstant, setAskConstant] = useState<string | null>(null);
   const [msgStructPrefill, setMsgStructPrefill] = useState<string | undefined>();
 
   // Refs to avoid stale closures
@@ -500,6 +512,49 @@ export default function App() {
       lines.push('');
     }
 
+    if (analysis.messageCompositions && analysis.messageCompositions.length > 0) {
+      const target = analysis.layoutTarget ?? '64bit';
+      const other = target === '64bit' ? '32bit' : '64bit';
+      const differing = analysis.messageCompositions.filter((c) => c.differsAcrossTargets);
+      lines.push('MESSAGE COMPOSITION:');
+      lines.push('='.repeat(60));
+      if (differing.length > 0) {
+        lines.push(
+          `  WARNING: ${differing.length} of ${analysis.messageCompositions.length} messages ` +
+          `change size between 32-bit and 64-bit.`
+        );
+        lines.push('');
+      }
+      for (const c of analysis.messageCompositions) {
+        const flag = c.differsAcrossTargets ? '  *** SIZE DIFFERS ***' : '';
+        lines.push(
+          `  ${c.msgConstant} -> ${c.rootStruct}  ` +
+          `${c.sizeByTarget[target]}B (${target}) / ${c.sizeByTarget[other]}B (${other})${flag}`
+        );
+        lines.push(`    = ${summarizeComposition(c)}`);
+        if (c.packAttribute !== undefined) lines.push(`    packed(${c.packAttribute})`);
+        if (c.isEstimated) lines.push('    NOTE: some member types unresolved — offsets estimated');
+        for (const w of c.pointerWarnings) lines.push(`    WARN pointer member: ${w}`);
+        for (const w of c.variableArrayWarnings) lines.push(`    WARN macro-length array: ${w}`);
+        lines.push('');
+      }
+    }
+
+    if (analysis.structRoles) {
+      const envelopes = analysis.structRoles.envelopes;
+      const candidates = analysis.structRoles.roles.filter((r) => r.role === 'root-candidate');
+      if (envelopes.length > 0 || candidates.length > 0) {
+        lines.push('STRUCT ROLES:');
+        lines.push('='.repeat(60));
+        if (envelopes.length > 0) lines.push(`  envelopes:       ${envelopes.join(', ')}`);
+        if (candidates.length > 0) {
+          lines.push(`  root candidates: ${candidates.map((r) => r.name).join(', ')}`);
+          lines.push('    (used in source, nothing embeds them, no message constant resolved)');
+        }
+        lines.push('');
+      }
+    }
+
     if (analysis.messageInterfaces.length > 0) {
       lines.push('MESSAGE INTERFACES:');
       lines.push('='.repeat(60));
@@ -556,6 +611,7 @@ export default function App() {
   // ── Misc ───────────────────────────────────────────────────────────────────
 
   const anyAnalyzing = analyzingApps.size > 0;
+  const llmEnabled = llmConfig.enabled;
   const hasAnyFiles = applications.some((a) => a.files.length > 0) || externalFiles.length > 0;
   const hasAnyAnalysis = applications.some((a) => a.analysis !== null);
 
@@ -600,6 +656,17 @@ export default function App() {
                 Interface
               </button>
             </div>
+          )}
+          {hasAnyAnalysis && llmEnabled && (
+            <button
+              className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                askOpen ? 'bg-blue-800/70 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+              }`}
+              onClick={() => setAskOpen((o) => !o)}
+              title="Ask questions about this analysis"
+            >
+              ✦ Ask
+            </button>
           )}
           {hasAnyFiles && (
             <button
@@ -689,6 +756,7 @@ export default function App() {
             msgStructPrefill={msgStructPrefill}
             msgStructMatchCounts={msgStructMatchCounts}
             onExportHeaderGen={() => { if (selectedAnalysis) handleExportHeaderGen(selectedAnalysis, selectedApp.name); }}
+            onAskAboutMessage={llmEnabled ? (c) => { setAskConstant(c); setAskOpen(true); } : undefined}
             onBack={(wasFullscreen) => {
               setAutoFullscreenAppGraph(wasFullscreen);
               setSelectedAppId(null);
@@ -821,6 +889,15 @@ export default function App() {
                 <ConfigButtons onExport={handleExportConfig} onImport={handleImportConfig} />
               </div>
               <div className="space-y-2">
+                {llmEnabled && hasAnyAnalysis && (
+                  <PatternSuggestions
+                    apps={applications}
+                    appId={null}
+                    existingPatterns={patterns}
+                    onAccept={handleAddPattern}
+                    onReanalyze={handleReanalyze}
+                  />
+                )}
                 <PatternRegistryUI
                   patterns={patterns}
                   onAdd={handleAddPattern}
@@ -846,9 +923,48 @@ export default function App() {
                 />
               </div>
             </div>
+
+            {/* LLM assistant */}
+            <div className="mt-8 border-t border-gray-800 pt-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                LLM Assistant
+              </h2>
+              <LlmSettings onConfigChange={setLlmConfig} />
+            </div>
           </>
         )}
       </main>
+
+      <AskPanel
+        apps={applications}
+        open={askOpen && llmEnabled}
+        onClose={() => { setAskOpen(false); setAskConstant(null); }}
+        initialAppId={selectedAppId}
+        initialConstant={askConstant}
+        onNavigate={({ filename }) => {
+          if (!filename) return;
+          // Path forms differ in both directions: the model cites what the
+          // digest showed (often a path), while the registry keys on whatever
+          // the drop gave it (often a bare basename). Match either way, then
+          // fall back to comparing basenames.
+          const base = (p: string) => p.split('/').pop() ?? p;
+          const matches = (loaded: string) =>
+            loaded === filename ||
+            loaded.endsWith(`/${filename}`) ||
+            filename.endsWith(`/${loaded}`) ||
+            base(loaded) === base(filename);
+
+          for (const app of applications) {
+            const hit = app.analysis?.files.find((f) => matches(f.filename));
+            if (hit) {
+              setSelectedAppId(app.id);
+              setActiveFile(hit.filename);
+              window.scrollTo({ top: 0, behavior: 'instant' });
+              return;
+            }
+          }
+        }}
+      />
     </div>
   );
 }
@@ -1061,6 +1177,7 @@ interface DrillDownViewProps {
   msgStructPrefill: string | undefined;
   msgStructMatchCounts: Map<string, number>;
   onExportHeaderGen: () => void;
+  onAskAboutMessage?: (constant: string) => void;
   onBack: (wasFullscreen: boolean) => void;
 }
 
@@ -1096,6 +1213,7 @@ function DrillDownView({
   msgStructPrefill,
   msgStructMatchCounts,
   onExportHeaderGen,
+  onAskAboutMessage,
   onBack,
 }: DrillDownViewProps) {
   const allWarnings = analysis?.warnings ?? [];
@@ -1118,6 +1236,17 @@ function DrillDownView({
           <SummaryBar analysis={analysis} />
           {analysis.headerGenBundle && (
             <HeaderGenBundlePanel process={app.name} bundle={analysis.headerGenBundle} onExport={onExportHeaderGen} />
+          )}
+
+          {(analysis.structRoles || (analysis.messageCompositions && analysis.messageCompositions.length > 0)) && (
+            <div className="mb-4">
+              <CompositionSection
+                compositions={analysis.messageCompositions ?? []}
+                structRoles={analysis.structRoles}
+                target={analysis.layoutTarget ?? '64bit'}
+                onAsk={onAskAboutMessage}
+              />
+            </div>
           )}
 
           {/* Graph */}

@@ -49,6 +49,10 @@ export interface CStruct {
   conditional: boolean;      // defined inside #ifdef block
   variants?: CStruct[];      // all conditional variants if multiple exist
   conflictsWith?: string[];  // other filenames defining same name differently
+  /** Byte alignment this struct is packed to, if `__attribute__((packed))` or
+   *  `#pragma pack(N)` was detected. Undefined = natural alignment. */
+  packAttribute?: number;
+  packSource?: import('./packDetection').PackSource;
 }
 
 export interface CEnum {
@@ -202,6 +206,8 @@ export interface StringAnalysis {
   msgStructPatterns: MsgStructPattern[];
   warnings: AnalysisWarning[];   // global warnings shown in banner
   structCatalog?: import('./structLayoutEngine').StructCatalog;
+  structRoles?: import('./structRoleAnalyzer').StructRoleReport;
+  messageCompositions?: import('./messageComposition').MessageComposition[];
   layoutTarget?: '32bit' | '64bit';
   payloadResolutions?: import('./payloadResolver').PayloadResolution[];
   headerGenBundle?: HeaderGenBundle;

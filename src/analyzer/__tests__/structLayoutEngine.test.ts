@@ -99,6 +99,26 @@ describe('structLayoutEngine — primitive fields (64-bit)', () => {
     const layout = computeLayout(s, emptyTypeDict(), opts32);
     expect(layout.fields[0].sizeBytes).toBe(4);
   });
+
+  it('aligns double to 8 bytes on 64-bit', () => {
+    const s = makeStruct('WithDouble', [
+      { type: 'char', name: 'a' },
+      { type: 'double', name: 'x' },
+    ]);
+    const layout = computeLayout(s, emptyTypeDict(), opts64);
+    expect(layout.fields[1].offsetBytes).toBe(8);
+    expect(layout.totalSizeBytes).toBe(16);
+  });
+
+  it('lays out an array of pointers as N machine words', () => {
+    const s = makeStruct('Names', [
+      { type: 'char *', name: 'name[32]' },
+    ]);
+    const layout = computeLayout(s, emptyTypeDict(), opts64);
+    expect(layout.fields[0].isPointer).toBe(true);
+    expect(layout.fields[0].isArray).toBe(true);
+    expect(layout.fields[0].sizeBytes).toBe(256);
+  });
 });
 
 // ── Nested structs ────────────────────────────────────────────────────────────
@@ -152,6 +172,24 @@ describe('structLayoutEngine — packed (packOverride=1)', () => {
     expect(layout.paddingBytes).toBe(0);
   });
 
+  it('does not re-lay out an unpacked child inside a packed parent', () => {
+    const inner = makeStruct('Inner', [
+      { type: 'char', name: 'a' },
+      { type: 'int', name: 'b' },
+    ]);
+    const outer = makeStruct('Outer', [
+      { type: 'char', name: 'x' },
+      { type: 'Inner', name: 'i' },
+    ]);
+    outer.packAttribute = 1;
+    const td: TypeDict = { structs: [inner, outer], enums: [], defines: [] };
+    const layout = computeLayout(outer, td, opts64);
+    // Inner stays 8 bytes; packed placement puts it at offset 1. Total 9.
+    expect(layout.fields[1].offsetBytes).toBe(1);
+    expect(layout.fields[1].sizeBytes).toBe(8);
+    expect(layout.totalSizeBytes).toBe(9);
+  });
+
   it('pack=2 limits alignment to 2', () => {
     const s = makeStruct('Pack2', [
       { type: 'uint8_t',  name: 'a' },
@@ -177,6 +215,16 @@ describe('structLayoutEngine — arrays', () => {
     expect(layout.fields[0].sizeBytes).toBe(32);
     expect(layout.fields[1].offsetBytes).toBe(32);
     expect(layout.totalSizeBytes).toBe(36);
+  });
+
+  it('marks a macro-length array as estimated rather than one element', () => {
+    const s = makeStruct('Batch', [
+      { type: 'int', name: 'tracks[CIC_MAX_TRACKS]' },
+    ]);
+    const layout = computeLayout(s, emptyTypeDict(), opts64);
+    expect(layout.fields[0].isArray).toBe(true);
+    expect(layout.fields[0].arrayLength).toBeUndefined();
+    expect(layout.isEstimated).toBe(true);
   });
 
   it('computes total size for uint32_t array', () => {

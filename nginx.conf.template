@@ -1,0 +1,47 @@
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Required for web-tree-sitter SharedArrayBuffer support
+    add_header Cross-Origin-Opener-Policy "same-origin";
+    add_header Cross-Origin-Embedder-Policy "require-corp";
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Serve WASM with correct MIME type
+    location ~* \.wasm$ {
+        add_header Content-Type application/wasm;
+        add_header Cross-Origin-Opener-Policy "same-origin";
+        add_header Cross-Origin-Embedder-Policy "require-corp";
+    }
+
+    # LLM_BLOCK_START
+    # Optional LLM proxy. docker-entrypoint.sh substitutes ${LLM_UPSTREAM} and
+    # replaces this whole block with `return 404` when the variable is unset,
+    # so /llm/ does not fall through to index.html.
+    #
+    # Same-origin on purpose: the COEP require-corp header above (needed for
+    # tree-sitter WASM) makes a direct cross-origin fetch to vLLM require CORS
+    # *and* CORP headers from vLLM. Proxying sidesteps all of it.
+    location /llm/ {
+        proxy_pass http://${LLM_UPSTREAM}/;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        client_max_body_size 10m;
+
+        # Token streaming: nginx must not buffer the SSE body, or the whole
+        # answer arrives in one lump and the streaming probe warns.
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+
+        # Long generations on a shared GPU.
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+    # LLM_BLOCK_END
+}

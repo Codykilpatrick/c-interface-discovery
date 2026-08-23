@@ -77,7 +77,11 @@ function isHeader(path: string): boolean {
   return /\.h$/i.test(path);
 }
 
-function canonicalName(raw: string, typeDict: TypeDict): string {
+/**
+ * Strip qualifiers, pointers and array extents from a member type and follow
+ * typedef aliases to the underlying name. Shared with `structRoleAnalyzer`.
+ */
+export function canonicalName(raw: string, typeDict: TypeDict): string {
   let name = raw
     .replace(/\b(const|volatile|restrict|struct|union|enum)\b/g, '')
     .replace(/\*/g, '')
