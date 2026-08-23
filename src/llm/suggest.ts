@@ -19,6 +19,8 @@
 import type { ApplicationGroup, CustomPattern, IpcType, LoadedFile } from '../analyzer/types';
 import { chat } from './client';
 import type { LlmConfig } from './config';
+import { sourceFilesOf } from './tools';
+import { escapeRegExp } from '../utils/escapeRegExp';
 import { LlmError } from './types';
 import type { JsonSchemaFormat } from './types';
 
@@ -135,13 +137,13 @@ export function gatherCandidates(apps: ApplicationGroup[], appId: string | null)
   const counts = new Map<string, { count: number; samples: string[] }>();
 
   for (const app of scoped) {
-    const sources = app.files.filter((f) => /\.(c|cpp)$/i.test(f.filename) && !f.rejected);
+    const sources = sourceFilesOf(app.files);
     for (const fa of app.analysis!.files) {
       for (const call of fa.unknownCalls) {
         const e = counts.get(call) ?? { count: 0, samples: [] };
         e.count++;
         if (e.samples.length < MAX_SITES_PER_CANDIDATE) {
-          const re = new RegExp(`\\b${call.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`);
+          const re = new RegExp(`\\b${escapeRegExp(call)}\\s*\\(`);
           for (const f of sources) {
             const lines = f.content.split('\n');
             for (let i = 0; i < lines.length && e.samples.length < MAX_SITES_PER_CANDIDATE; i++) {
@@ -163,10 +165,10 @@ export function gatherCandidates(apps: ApplicationGroup[], appId: string | null)
 
 // ── Verification ──────────────────────────────────────────────────────────────
 
-function sourceFilesOf(apps: ApplicationGroup[], appId: string | null): LoadedFile[] {
+function scopedSourceFiles(apps: ApplicationGroup[], appId: string | null): LoadedFile[] {
   return apps
     .filter((a) => appId === null || a.id === appId)
-    .flatMap((a) => a.files.filter((f) => /\.(c|cpp)$/i.test(f.filename) && !f.rejected));
+    .flatMap((a) => sourceFilesOf(a.files));
 }
 
 /**
@@ -231,7 +233,7 @@ export function verifySuggestion(
     warnings.push(`Matches ${((matchCount / totalLines) * 100).toFixed(0)}% of all lines — likely too broad`);
   }
   // The proposal should match the call it was derived from.
-  if (!new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(patternStr)) {
+  if (!new RegExp(escapeRegExp(name)).test(patternStr)) {
     warnings.push(`Pattern does not mention ${name}`);
   }
 
@@ -342,7 +344,7 @@ export async function suggestPatterns(opts: SuggestOptions): Promise<SuggestionR
     );
   }
 
-  const sources = sourceFilesOf(apps, appId);
+  const sources = scopedSourceFiles(apps, appId);
   const accepted: VerifiedSuggestion[] = [];
   const rejected: RejectedSuggestion[] = [];
 

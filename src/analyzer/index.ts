@@ -9,13 +9,9 @@ import type { LayoutOptions } from './structLayoutEngine';
 import { buildHeaderGenBundle } from './headerGenBundle';
 import { analyzeStructRoles } from './structRoleAnalyzer';
 import { buildMessageCompositions } from './messageComposition';
+import { escapeRegExp } from '../utils/escapeRegExp';
 
 let _parser: Parser | null = null;
-
-/** Escape a struct name for use in a word-boundary regex. */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /** Initialize web-tree-sitter. Must be called once before analyzeString(). */
 export async function initParser(): Promise<void> {

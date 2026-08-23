@@ -6,8 +6,6 @@
  * not carry an endpoint or an API key.
  */
 
-export type LayoutlessTarget = '32bit' | '64bit';
-
 export interface LlmConfig {
   /** Master switch. When false nothing in `src/llm` issues a request. */
   enabled: boolean;
@@ -27,18 +25,6 @@ export interface LlmConfig {
   digestBudgetTokens: number;
   /** Allow `getSourceLines` to return verbatim source. */
   includeSourceSnippets: boolean;
-  /**
-   * Stream tool-call turns.
-   *
-   * Default false. vLLM's `gemma4` tool parser has open streaming defects
-   * (vllm#42696, #44522, #39089, #39392) reported at 21–35% success streaming
-   * versus 100% non-streaming. Tool turns are short, so the cost of not
-   * streaming them is negligible; the final prose turn still streams with
-   * `tool_choice: 'none'`, which never exercises the buggy path.
-   *
-   * Flip this on once the upstream fixes land.
-   */
-  streamToolTurns: boolean;
   /** Request timeout in milliseconds. */
   timeoutMs: number;
 }
@@ -53,7 +39,6 @@ export const DEFAULT_LLM_CONFIG: LlmConfig = {
   thinking: 'auto',
   digestBudgetTokens: 32_000,
   includeSourceSnippets: true,
-  streamToolTurns: false,
   timeoutMs: 120_000,
 };
 
@@ -103,7 +88,6 @@ export function normalizeConfig(raw: unknown): LlmConfig {
     digestBudgetTokens: clampNumber(o.digestBudgetTokens, 500, 200_000, d.digestBudgetTokens),
     includeSourceSnippets:
       typeof o.includeSourceSnippets === 'boolean' ? o.includeSourceSnippets : d.includeSourceSnippets,
-    streamToolTurns: typeof o.streamToolTurns === 'boolean' ? o.streamToolTurns : d.streamToolTurns,
     timeoutMs: clampNumber(o.timeoutMs, 1000, 600_000, d.timeoutMs),
   };
 }
@@ -125,10 +109,3 @@ export function saveLlmConfig(config: LlmConfig): void {
   }
 }
 
-export function clearLlmConfig(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // ignore
-  }
-}

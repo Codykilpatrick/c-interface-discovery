@@ -98,14 +98,6 @@ export default function PatternSuggestions({
         <p className="text-xs text-gray-500">
           Nothing survived verification
           {considered.length > 0 && <> from {considered.length} candidate(s)</>}.
-          {rejected.length > 0 && (
-            <>
-              {' '}
-              <button className="underline hover:text-gray-300" onClick={() => setShowRejected((v) => !v)}>
-                {showRejected ? 'hide' : `${rejected.length} proposal(s) were discarded`}
-              </button>
-            </>
-          )}
         </p>
       )}
 
@@ -180,15 +172,16 @@ export default function PatternSuggestions({
               </div>
             );
           })}
-          {rejected.length > 0 && (
-            <button
-              className="text-[11px] text-gray-600 hover:text-gray-400 underline"
-              onClick={() => setShowRejected((v) => !v)}
-            >
-              {showRejected ? 'hide' : `${rejected.length} proposal(s) discarded during verification`}
-            </button>
-          )}
         </div>
+      )}
+
+      {rejected.length > 0 && (
+        <button
+          className="mt-2 text-[11px] text-gray-600 hover:text-gray-400 underline"
+          onClick={() => setShowRejected((v) => !v)}
+        >
+          {showRejected ? 'hide' : `${rejected.length} proposal(s) discarded during verification`}
+        </button>
       )}
 
       {showRejected && rejected.length > 0 && (

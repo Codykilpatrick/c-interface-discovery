@@ -26,6 +26,7 @@ import type { ApplicationGroup, MessageInterface, StringAnalysis } from '../anal
 import type { MessageComposition } from '../analyzer/messageComposition';
 import { summarizeComposition } from '../analyzer/messageComposition';
 import type { StructRoleInfo } from '../analyzer/structRoleAnalyzer';
+import { crossAppEdges } from './tools';
 
 export type DigestScope =
   | { kind: 'app'; appId: string }
@@ -35,8 +36,6 @@ export type DigestScope =
 export interface DigestOptions {
   budgetTokens: number;
   scope: DigestScope;
-  /** Applied to every string before it enters the prompt. */
-  redact?: (s: string) => string;
 }
 
 export interface DigestOmission {
@@ -80,10 +79,6 @@ interface Section {
   /** Entries excluded by relevance, and the tool that retrieves them. */
   overflow?: { count: number; via: string };
   retrievableVia: string;
-}
-
-function sectionText(s: Section): string {
-  return `${s.lines.join('\n')}\n`;
 }
 
 // ── Scope resolution ──────────────────────────────────────────────────────────
@@ -141,7 +136,6 @@ function buildSections(scoped: ScopedApp[], scope: DigestScope): Section[] {
 
   // ── Tier 2: message interfaces, with composition and both target sizes ──
   const msgLines: string[] = [];
-  let msgOverflow = 0;
   for (const app of scoped) {
     const comps = new Map(
       (app.analysis.messageCompositions ?? []).map((c) => [c.msgConstant, c]),
@@ -167,31 +161,14 @@ function buildSections(scoped: ScopedApp[], scope: DigestScope): Section[] {
         ...msgLines.map((l) => (l.startsWith('    ') ? l : `- ${l}`)),
       ],
       retrievableVia: 'searchMessages',
-      ...(msgOverflow > 0 && { overflow: { count: msgOverflow, via: 'searchMessages' } }),
     });
   }
-  void msgOverflow;
 
   // ── Tier 3: cross-app edges ──
   if (scoped.length > 1) {
-    const edgeLines: string[] = [];
-    const producersOf = new Map<string, string[]>();
-    const consumersOf = new Map<string, string[]>();
-    for (const app of scoped) {
-      for (const m of app.analysis.messageInterfaces) {
-        const roles = m.fileRoles;
-        const isP = roles.some((r) => r.role !== 'consumer');
-        const isC = roles.some((r) => r.role !== 'producer');
-        if (isP) producersOf.set(m.msgTypeConstant, [...(producersOf.get(m.msgTypeConstant) ?? []), app.name]);
-        if (isC) consumersOf.set(m.msgTypeConstant, [...(consumersOf.get(m.msgTypeConstant) ?? []), app.name]);
-      }
-    }
-    for (const constant of [...new Set([...producersOf.keys(), ...consumersOf.keys()])].sort()) {
-      const p = producersOf.get(constant) ?? [];
-      const c = (consumersOf.get(constant) ?? []).filter((x) => !p.includes(x) || p.length === 1);
-      if (p.length === 0 || c.length === 0) continue;
-      edgeLines.push(`- ${p.join('/')} -> ${c.join('/')} : ${constant}`);
-    }
+    const edgeLines = crossAppEdges(scoped)
+      .filter((e) => !e.unmatched)
+      .map((e) => `- ${e.producers.join('/')} -> ${e.consumers.join('/')} : ${e.constant}`);
     if (edgeLines.length > 0) {
       sections.push({
         tier: 3, name: 'CROSS-APP FLOWS',
@@ -366,7 +343,7 @@ export function buildDigest(apps: ApplicationGroup[], opts: DigestOptions): Anal
 
   // Fill the remaining budget in tier order.
   for (const section of buildSections(scoped, opts.scope)) {
-    const body = sectionText(section);
+    const body = `${section.lines.join('\n')}\n`;
     const cost = estimateTokens(body);
     const entryCount = section.lines.length - 1;
 
@@ -435,8 +412,7 @@ export function buildDigest(apps: ApplicationGroup[], opts: DigestOptions): Anal
     used += estimateTokens(notice);
   }
 
-  let text = parts.join('\n');
-  if (opts.redact) text = opts.redact(text);
+  const text = parts.join('\n');
 
   return {
     text,

@@ -68,6 +68,15 @@ const SCHEMA_PROBE = {
   },
 };
 
+/** Probes that cannot run until the endpoint answers, in emit order. */
+const DEPENDENT_PROBES: [string, string][] = [
+  ['completion', 'Non-streaming completion'],
+  ['reasoning', 'Reasoning split (reasoning_content)'],
+  ['streaming', 'Streaming completion (SSE)'],
+  ['tools', 'Tool calling'],
+  ['schema', 'Structured output (response_format)'],
+];
+
 function describe(e: unknown): { detail: string; remedy: string } {
   if (e instanceof LlmError) {
     switch (e.kind) {
@@ -145,13 +154,7 @@ export async function runDiagnostics(
   if (modelsProbe.error) {
     const { detail, remedy } = describe(modelsProbe.error);
     emit({ id: 'models', label: 'Endpoint reachable (GET /v1/models)', status: 'fail', detail, remedy, durationMs: modelsProbe.ms });
-    for (const [id, label] of [
-      ['completion', 'Non-streaming completion'],
-      ['streaming', 'Streaming completion (SSE)'],
-      ['tools', 'Tool calling'],
-      ['schema', 'Structured output (response_format)'],
-      ['reasoning', 'Reasoning split (reasoning_content)'],
-    ]) skip(id, label, 'Endpoint unreachable');
+    for (const [id, label] of DEPENDENT_PROBES) skip(id, label, 'Endpoint unreachable');
     return { results, models, ok: false };
   }
 
@@ -174,13 +177,7 @@ export async function runDiagnostics(
     : {};
 
   if (models.length === 0) {
-    for (const [id, label] of [
-      ['completion', 'Non-streaming completion'],
-      ['reasoning', 'Reasoning split (reasoning_content)'],
-      ['streaming', 'Streaming completion (SSE)'],
-      ['tools', 'Tool calling'],
-      ['schema', 'Structured output (response_format)'],
-    ]) skip(id, label, 'Endpoint served no models');
+    for (const [id, label] of DEPENDENT_PROBES) skip(id, label, 'Endpoint served no models');
     return { results, models, ...suggestion, ok: false };
   }
 

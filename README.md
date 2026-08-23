@@ -218,7 +218,7 @@ file you can carry off the host. This is the acceptance test for a new deploymen
 ## Design docs
 
 - [`docs/payload-resolution-patterns.md`](docs/payload-resolution-patterns.md) — how the payload resolver infers struct types at send sites
-- [`docs/llm-integration-plan.md`](docs/llm-integration-plan.md) — **proposed** integration for querying analysis output with a self-hosted Gemma 4 / vLLM model (not implemented)
+- [`docs/llm-integration-plan.md`](docs/llm-integration-plan.md) — design rationale for the optional LLM assistant: model assumptions and the measured context strategy
 
 ## Known limitations
 

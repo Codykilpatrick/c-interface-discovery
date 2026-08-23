@@ -224,18 +224,6 @@ export default function LlmSettings({ onConfigChange }: LlmSettingsProps) {
             <span className="text-xs text-gray-300">Allow the model to fetch source lines</span>
           </label>
 
-          <label className="flex items-center gap-2 mb-4 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={config.streamToolTurns}
-              onChange={(e) => update({ streamToolTurns: e.target.checked })}
-            />
-            <span className="text-xs text-gray-300">Stream tool-call turns</span>
-            <span className="text-[11px] text-amber-500/80">
-              — leave off: vLLM&apos;s gemma4 tool parser is unreliable when streaming
-            </span>
-          </label>
-
           {connError && (
             <div className="mb-3 p-2 border border-red-900/60 bg-red-950/20 rounded text-xs text-red-300">
               {connError}

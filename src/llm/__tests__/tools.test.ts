@@ -214,15 +214,6 @@ describe('getSourceLines', () => {
     expect(asObj(r.result).hint).toContain('analysis metadata');
   });
 
-  it('applies the redaction hook to returned source', () => {
-    const r = asObj(run('getSourceLines',
-      { file: 'cic/track_router.c', from: 3, to: 3 },
-      ctx({ redact: (s) => s.replace(/link11_write/g, 'XXX') }),
-    ).result);
-    expect(r.lines[0].text).toContain('XXX');
-    expect(r.lines[0].text).not.toContain('link11_write');
-  });
-
   it('lists loaded files when the name does not match', () => {
     const r = asObj(run('getSourceLines', { file: 'nope.c', from: 1, to: 2 }).result);
     expect(r.error).toContain('No file matching');

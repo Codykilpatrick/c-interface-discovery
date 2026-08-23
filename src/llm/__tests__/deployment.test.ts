@@ -10,72 +10,41 @@ import path from 'node:path';
 const template = fs.readFileSync(path.resolve('nginx.conf.template'), 'utf8');
 const entrypoint = fs.readFileSync(path.resolve('docker-entrypoint.sh'), 'utf8');
 
-/** What the entrypoint's sed does when LLM_UPSTREAM is unset. */
-const stripped = template
-  .split('\n')
-  .reduce<{ out: string[]; skipping: boolean }>((acc, line) => {
-    if (line.includes('# LLM_BLOCK_START')) return { ...acc, skipping: true };
-    if (line.includes('# LLM_BLOCK_END')) return { ...acc, skipping: false };
-    if (!acc.skipping) acc.out.push(line);
-    return acc;
-  }, { out: [], skipping: false })
-  .out.join('\n');
+const lines = template.split('\n');
+const start = lines.findIndex((l) => l.includes('# LLM_BLOCK_START'));
+const end = lines.findIndex((l) => l.includes('# LLM_BLOCK_END'));
+const block = lines.slice(start, end + 1).join('\n');
+const outsideBlock = [...lines.slice(0, start), ...lines.slice(end + 1)].join('\n');
 
-/** What envsubst does with an explicit single-variable list. */
-const substituted = template.replace(/\$\{LLM_UPSTREAM\}/g, 'vllm:8000');
-
-describe('nginx template — proxy enabled', () => {
-  it('resolves the upstream into a proxy_pass', () => {
-    expect(substituted).toContain('proxy_pass http://vllm:8000/;');
+describe('nginx template', () => {
+  it('has the markers the entrypoint strips between', () => {
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
   });
 
-  it('leaves no unsubstituted placeholders', () => {
-    expect(substituted).not.toMatch(/\$\{/);
+  it('confines everything LLM-related to that block, so the strip leaves valid config', () => {
+    // A location whose upstream cannot resolve stops nginx booting entirely,
+    // which would take the whole app down over an optional feature.
+    expect(outsideBlock.toLowerCase()).not.toContain('llm');
+    expect(outsideBlock).not.toContain('proxy_pass');
+    expect((block.match(/\{/g) ?? []).length).toBe((block.match(/\}/g) ?? []).length);
   });
 
-  it('keeps nginx runtime variables intact', () => {
-    // envsubst is called with an explicit var list precisely so these survive.
-    // They use $name, not ${name}, so the substitution cannot touch them.
-    expect(substituted).toContain('try_files $uri $uri/ /index.html;');
-    expect(substituted).toContain('proxy_set_header Host $host;');
+  it('uses only the one placeholder the entrypoint substitutes', () => {
+    expect(block).toContain('proxy_pass http://${LLM_UPSTREAM}/;');
     expect(template).not.toMatch(/\$\{(?!LLM_UPSTREAM)/);
+    // nginx's own $name variables use no braces, so envsubst cannot touch them.
+    expect(outsideBlock).toContain('try_files $uri $uri/ /index.html;');
   });
 
-  it('disables buffering, without which the stream arrives in one lump', () => {
-    expect(substituted).toContain('proxy_buffering off;');
-  });
-
-  it('allows a long read timeout for generations on a shared GPU', () => {
-    expect(substituted).toMatch(/proxy_read_timeout\s+600s;/);
+  it('disables buffering and allows a long read timeout', () => {
+    // Without these the whole answer arrives in one lump, or is cut off.
+    expect(block).toContain('proxy_buffering off;');
+    expect(block).toMatch(/proxy_read_timeout\s+600s;/);
   });
 
   it('keeps the COEP header the tree-sitter WASM loader depends on', () => {
-    expect(substituted).toContain('Cross-Origin-Embedder-Policy "require-corp"');
-  });
-});
-
-describe('nginx template — proxy disabled', () => {
-  it('removes every proxy directive, so nginx starts with no upstream', () => {
-    // A location whose upstream cannot resolve stops nginx booting entirely,
-    // which would take the whole app down over an optional feature.
-    expect(stripped).not.toContain('proxy_pass');
-    expect(stripped).not.toContain('/llm/');
-    expect(stripped).not.toContain('LLM_UPSTREAM');
-  });
-
-  it('leaves no dangling comment about a proxy that is not there', () => {
-    expect(stripped.toLowerCase()).not.toContain('llm');
-  });
-
-  it('still serves the app and the WASM MIME type', () => {
-    expect(stripped).toContain('try_files $uri $uri/ /index.html;');
-    expect(stripped).toContain('application/wasm');
-  });
-
-  it('keeps balanced braces after the strip', () => {
-    const open = (stripped.match(/\{/g) ?? []).length;
-    const close = (stripped.match(/\}/g) ?? []).length;
-    expect(open).toBe(close);
+    expect(outsideBlock).toContain('Cross-Origin-Embedder-Policy "require-corp"');
   });
 });
 

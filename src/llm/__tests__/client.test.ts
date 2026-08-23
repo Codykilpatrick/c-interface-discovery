@@ -1,9 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
-  accumulateToolCalls,
   chat,
   chatStream,
-  collectStream,
   eventsFromChunk,
   listModels,
   parseChatResponse,
@@ -14,6 +12,19 @@ import {
   DONE_FRAME, completionBody, deltaFrame, installMockServer,
   jsonResponse, modelsBody, sseResponse, textResponse,
 } from './mockServer';
+
+/** Drain a stream into a single result. */
+async function collectStream(stream: AsyncGenerator<StreamEvent>) {
+  let content = '';
+  let reasoningContent = '';
+  let finishReason: string | null = null;
+  for await (const ev of stream) {
+    if (ev.type === 'content') content += ev.delta;
+    else if (ev.type === 'reasoning') reasoningContent += ev.delta;
+    else if (ev.type === 'done' && ev.finishReason) finishReason = ev.finishReason;
+  }
+  return { content, reasoningContent, finishReason };
+}
 
 const config: LlmConfig = {
   ...DEFAULT_LLM_CONFIG,
@@ -349,47 +360,6 @@ describe('chat — cancellation', () => {
     // If the timer were still armed, advancing past it would reject an unhandled promise.
     vi.advanceTimersByTime(10_000);
     expect(vi.getTimerCount()).toBe(0);
-  });
-});
-
-// ── Tool-call accumulation ────────────────────────────────────────────────────
-
-describe('accumulateToolCalls', () => {
-  it('joins argument fragments for one call', () => {
-    const events = [
-      ...eventsFromChunk(JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'getStructLayout', arguments: '{"na' } }] } }] })),
-      ...eventsFromChunk(JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'me":"ContactMsg"}' } }] } }] })),
-    ];
-    expect(accumulateToolCalls(events)).toEqual([{
-      id: 'c1', type: 'function',
-      function: { name: 'getStructLayout', arguments: '{"name":"ContactMsg"}' },
-    }]);
-  });
-
-  it('keeps two interleaved calls on their own indices', () => {
-    // vllm#42696: under load the parser has mis-attributed fragments across
-    // indices. Index-keyed accumulation is what makes that detectable.
-    const events = [
-      ...eventsFromChunk(JSON.stringify({ choices: [{ delta: { tool_calls: [
-        { index: 0, id: 'a', function: { name: 'f', arguments: '{"x":' } },
-        { index: 1, id: 'b', function: { name: 'g', arguments: '{"y":' } },
-      ] } }] })),
-      ...eventsFromChunk(JSON.stringify({ choices: [{ delta: { tool_calls: [
-        { index: 1, function: { arguments: '2}' } },
-        { index: 0, function: { arguments: '1}' } },
-      ] } }] })),
-    ];
-    expect(accumulateToolCalls(events)).toEqual([
-      { id: 'a', type: 'function', function: { name: 'f', arguments: '{"x":1}' } },
-      { id: 'b', type: 'function', function: { name: 'g', arguments: '{"y":2}' } },
-    ]);
-  });
-
-  it('drops a call that never received a name', () => {
-    const events = eventsFromChunk(JSON.stringify({
-      choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{}' } }] } }],
-    }));
-    expect(accumulateToolCalls(events)).toEqual([]);
   });
 });
 

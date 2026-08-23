@@ -3,11 +3,9 @@
  *
  * Hand-rolled on `fetch` — no SDK, so nothing is added to the airgap transfer.
  *
- * Request strategy is split deliberately (see `LlmConfig.streamToolTurns`):
- * tool-call turns are non-streaming, the final prose turn streams with
- * `tool_choice: 'none'`. vLLM's `gemma4` tool parser has open streaming defects,
- * and this arrangement never exercises the buggy path while still streaming the
- * long part of the answer.
+ * Request strategy is split deliberately (see `conversation.ts`): tool-call
+ * turns are non-streaming, the final prose turn streams with
+ * `tool_choice: 'none'`.
  */
 
 import type { LlmConfig } from './config';
@@ -316,40 +314,4 @@ export async function* chatStream(
   } finally {
     cleanup();
   }
-}
-
-/** Convenience: drain a stream into a single result. */
-export async function collectStream(
-  stream: AsyncGenerator<StreamEvent>,
-): Promise<Pick<ChatResult, 'content' | 'reasoningContent' | 'finishReason'>> {
-  let content = '';
-  let reasoningContent = '';
-  let finishReason: string | null = null;
-  for await (const ev of stream) {
-    if (ev.type === 'content') content += ev.delta;
-    else if (ev.type === 'reasoning') reasoningContent += ev.delta;
-    else if (ev.type === 'done' && ev.finishReason) finishReason = ev.finishReason;
-  }
-  return { content, reasoningContent, finishReason };
-}
-
-/** Assemble streamed tool-call deltas by index. */
-export function accumulateToolCalls(events: StreamEvent[]): ToolCall[] {
-  const byIndex = new Map<number, { id: string; name: string; args: string }>();
-  for (const ev of events) {
-    if (ev.type !== 'tool-call-delta') continue;
-    const cur = byIndex.get(ev.index) ?? { id: '', name: '', args: '' };
-    if (ev.id) cur.id = ev.id;
-    if (ev.name) cur.name = ev.name;
-    if (ev.argsDelta) cur.args += ev.argsDelta;
-    byIndex.set(ev.index, cur);
-  }
-  return [...byIndex.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .filter(([, c]) => c.name !== '')
-    .map(([i, c]) => ({
-      id: c.id !== '' ? c.id : `call_${i}`,
-      type: 'function' as const,
-      function: { name: c.name, arguments: c.args },
-    }));
 }

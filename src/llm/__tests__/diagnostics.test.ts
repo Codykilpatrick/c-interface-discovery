@@ -255,10 +255,6 @@ describe('config', () => {
     expect(DEFAULT_LLM_CONFIG.enabled).toBe(false);
   });
 
-  it('defaults tool turns to non-streaming', () => {
-    expect(DEFAULT_LLM_CONFIG.streamToolTurns).toBe(false);
-  });
-
   it('repairs a corrupt stored config rather than producing broken requests', () => {
     const c = normalizeConfig({
       enabled: 'yes', baseUrl: '   ', temperature: 99, maxTokens: -5,

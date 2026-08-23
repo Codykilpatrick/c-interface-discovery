@@ -21,6 +21,7 @@
  */
 
 import type { CStruct, MessageInterface, TypeDict } from './types';
+import { canonicalName } from './headerGenBundle';
 import type { PayloadResolution } from './payloadResolver';
 import type { StructCatalog } from './structLayoutEngine';
 
@@ -96,30 +97,10 @@ const ROLE_ORDER: Record<StructRole, number> = {
   'orphan': 6,
 };
 
-/**
- * Resolve a field's type name to a struct in the dictionary, following typedef
- * aliases. Mirrors `canonicalName` in headerGenBundle — kept local so the two
- * passes can evolve independently.
- */
+/** Resolve a field's type name to a struct in the dictionary. */
 function resolveFieldStruct(rawType: string, typeDict: TypeDict): CStruct | null {
-  let name = rawType
-    .replace(/\b(const|volatile|restrict|struct|union|enum|signed|unsigned)\b/g, '')
-    .replace(/\*/g, '')
-    .replace(/\[[^\]]*\]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const tokens = name.split(' ').filter(Boolean);
-  name = tokens[tokens.length - 1] ?? '';
-  if (!name) return null;
-
-  for (let hops = 0; hops < 4; hops++) {
-    const direct = typeDict.structs.find((s) => s.name === name);
-    if (direct) return direct;
-    const alias = typeDict.typedefAliases?.[name];
-    if (!alias || alias === name) break;
-    name = alias;
-  }
-  return typeDict.structs.find((s) => s.name === name) ?? null;
+  const name = canonicalName(rawType, typeDict);
+  return name ? typeDict.structs.find((s) => s.name === name) ?? null : null;
 }
 
 /** A pointer member does not compose the parent — it references it. */
@@ -169,13 +150,12 @@ export function analyzeStructRoles(input: StructRoleInput): StructRoleReport {
       const edges = containedBy.get(child.name) ?? [];
       // One parent counts once even if it embeds the child twice.
       if (!edges.some((e) => e.parent === s.name)) {
+        const arrayLength = arrayLengthOf(f.type, f.name);
         edges.push({
           parent: s.name,
           isFirstField: index === 0,
           fieldName: f.name,
-          ...(arrayLengthOf(f.type, f.name) !== undefined && {
-            arrayLength: arrayLengthOf(f.type, f.name),
-          }),
+          ...(arrayLength !== undefined && { arrayLength }),
         });
       }
       containedBy.set(child.name, edges);

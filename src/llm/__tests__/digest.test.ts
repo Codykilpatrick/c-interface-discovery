@@ -190,20 +190,11 @@ describe('digest — budget and degradation', () => {
   });
 });
 
-describe('digest — determinism and redaction', () => {
+describe('digest — determinism', () => {
   it('is byte-identical across runs, so the prefix cache hits', () => {
     const a = buildDigest(makeApps(), { budgetTokens: BIG, scope: { kind: 'all' } });
     const b = buildDigest(makeApps(), { budgetTokens: BIG, scope: { kind: 'all' } });
     expect(a.text).toBe(b.text);
-  });
-
-  it('applies the redaction hook to the whole prompt', () => {
-    const d = buildDigest(makeApps(), {
-      budgetTokens: BIG, scope: { kind: 'all' },
-      redact: (s) => s.replace(/MSG_TYPE_CONTACT/g, 'REDACTED'),
-    });
-    expect(d.text).not.toContain('MSG_TYPE_CONTACT');
-    expect(d.text).toContain('REDACTED');
   });
 });
 

@@ -17,6 +17,7 @@
 import type { ApplicationGroup, LoadedFile, StringAnalysis } from '../analyzer/types';
 import { summarizeComposition } from '../analyzer/messageComposition';
 import { findReferences } from '../utils/findReferences';
+import { escapeRegExp } from '../utils/escapeRegExp';
 import type { ToolDefinition } from './types';
 
 export interface ToolContext {
@@ -25,7 +26,6 @@ export interface ToolContext {
   defaultAppId: string | null;
   /** Gates `getSourceLines`. */
   includeSourceSnippets: boolean;
-  redact?: (s: string) => string;
 }
 
 export interface ToolExecution {
@@ -226,7 +226,8 @@ function resolveApp(ctx: ToolContext, named?: unknown): { name: string; analysis
   return { name: scoped.name, analysis: scoped.analysis!, files: scoped.files };
 }
 
-function sourceFilesOf(files: LoadedFile[]): LoadedFile[] {
+/** `.c`/`.cpp` files that parsed — the only ones worth grepping. */
+export function sourceFilesOf(files: LoadedFile[]): LoadedFile[] {
   return files.filter((f) => /\.(c|cpp)$/i.test(f.filename) && !f.rejected);
 }
 
@@ -247,6 +248,50 @@ function nearest(name: string, candidates: string[]): string[] {
     .slice(0, 8);
 }
 
+export interface CrossAppEdge {
+  constant: string;
+  producers: string[];
+  consumers: string[];
+  /** Apps on both sides of the same constant — a transit/broker hop. */
+  transitApps?: string[];
+  /** One side has no app, so nothing actually flows. */
+  unmatched: boolean;
+}
+
+/**
+ * Message flow between applications. Shared with the context digest so the two
+ * cannot report different graphs for the same analysis.
+ */
+export function crossAppEdges(
+  apps: { name: string; analysis: StringAnalysis }[],
+  constant?: string,
+): CrossAppEdge[] {
+  const producersOf = new Map<string, Set<string>>();
+  const consumersOf = new Map<string, Set<string>>();
+  const add = (m: Map<string, Set<string>>, key: string, app: string) => {
+    const set = m.get(key) ?? new Set<string>();
+    set.add(app);
+    m.set(key, set);
+  };
+  for (const a of apps) {
+    for (const m of a.analysis.messageInterfaces) {
+      if (constant && m.msgTypeConstant !== constant) continue;
+      if (m.fileRoles.some((r) => r.role !== 'consumer')) add(producersOf, m.msgTypeConstant, a.name);
+      if (m.fileRoles.some((r) => r.role !== 'producer')) add(consumersOf, m.msgTypeConstant, a.name);
+    }
+  }
+  return [...new Set([...producersOf.keys(), ...consumersOf.keys()])].sort().map((c) => {
+    const producers = [...(producersOf.get(c) ?? [])].sort();
+    const consumers = [...(consumersOf.get(c) ?? [])].sort();
+    const transit = producers.filter((x) => consumers.includes(x));
+    return {
+      constant: c, producers, consumers,
+      ...(transit.length && { transitApps: transit }),
+      unmatched: producers.length === 0 || consumers.length === 0,
+    };
+  });
+}
+
 // ── Executors ─────────────────────────────────────────────────────────────────
 
 type Executor = (args: Record<string, unknown>, ctx: ToolContext) => unknown;
@@ -261,8 +306,9 @@ const EXECUTORS: Record<string, Executor> = {
     const m = app.analysis.messageInterfaces.find((x) => x.msgTypeConstant === constant);
     if (!m) {
       const all = app.analysis.messageInterfaces.map((x) => x.msgTypeConstant);
+      const near = nearest(constant, all);
       return err(`No message interface named ${constant} in ${app.name}.`,
-        nearest(constant, all).length ? `Did you mean: ${nearest(constant, all).join(', ')}` : `Known: ${all.slice(0, 20).join(', ')}`);
+        near.length ? `Did you mean: ${near.join(', ')}` : `Known: ${all.slice(0, 20).join(', ')}`);
     }
     const comp = app.analysis.messageCompositions?.find((c) => c.msgConstant === constant);
     return {
@@ -297,9 +343,9 @@ const EXECUTORS: Record<string, Executor> = {
     const catalog = app.analysis.structCatalog;
     const here = catalog?.layouts.find((l) => l.name === name);
     if (!here) {
-      const all = (catalog?.layouts ?? []).map((l) => l.name);
+      const near = nearest(name, (catalog?.layouts ?? []).map((l) => l.name));
       return err(`No struct named ${name} in ${app.name}.`,
-        nearest(name, all).length ? `Did you mean: ${nearest(name, all).join(', ')}` : undefined);
+        near.length ? `Did you mean: ${near.join(', ')}` : undefined);
     }
     const target = app.analysis.layoutTarget ?? '64bit';
     const role = app.analysis.structRoles?.byName.get(name);
@@ -337,9 +383,9 @@ const EXECUTORS: Record<string, Executor> = {
     if (!name) return err('name is required');
     const roles = app.analysis.structRoles;
     if (!roles?.byName.has(name)) {
-      const all = [...(roles?.byName.keys() ?? [])];
+      const near = nearest(name, [...(roles?.byName.keys() ?? [])]);
       return err(`No struct named ${name} in ${app.name}.`,
-        nearest(name, all).length ? `Did you mean: ${nearest(name, all).join(', ')}` : undefined);
+        near.length ? `Did you mean: ${near.join(', ')}` : undefined);
     }
     const maxDepth = Math.min(int(args.depth) ?? 4, MAX_GRAPH_DEPTH);
     const sizeOf = new Map((app.analysis.structCatalog?.layouts ?? []).map((l) => [l.name, l.totalSizeBytes]));
@@ -446,10 +492,8 @@ const EXECUTORS: Record<string, Executor> = {
     const start = Math.max(1, from);
     const end = Math.min(all.length, Math.max(start, to), start + MAX_SOURCE_LINES - 1);
     const lines = all.slice(start - 1, end).map((text, i) => ({ line: start + i, text }));
-    const body = { app: app.name, file: hit.filename, from: start, to: end, totalLines: all.length, lines,
+    return { app: app.name, file: hit.filename, from: start, to: end, totalLines: all.length, lines,
       ...(to > end && { truncated: `requested through ${to}, capped at ${MAX_SOURCE_LINES} lines` }) };
-    if (!ctx.redact) return body;
-    return { ...body, lines: lines.map((l) => ({ ...l, text: ctx.redact!(l.text) })) };
   },
 
   getUnknownCalls(args, ctx) {
@@ -482,33 +526,7 @@ const EXECUTORS: Record<string, Executor> = {
   getCrossAppEdges(args, ctx) {
     const analyzed = ctx.apps.filter((a) => a.analysis !== null);
     if (analyzed.length === 0) return err('No analyzed applications are loaded.');
-    const constant = str(args.constant);
-
-    const producersOf = new Map<string, Set<string>>();
-    const consumersOf = new Map<string, Set<string>>();
-    for (const a of analyzed) {
-      for (const m of a.analysis!.messageInterfaces) {
-        if (constant && m.msgTypeConstant !== constant) continue;
-        const isP = m.fileRoles.some((r) => r.role !== 'consumer');
-        const isC = m.fileRoles.some((r) => r.role !== 'producer');
-        if (isP) (producersOf.get(m.msgTypeConstant) ?? producersOf.set(m.msgTypeConstant, new Set()).get(m.msgTypeConstant)!).add(a.name);
-        if (isC) (consumersOf.get(m.msgTypeConstant) ?? consumersOf.set(m.msgTypeConstant, new Set()).get(m.msgTypeConstant)!).add(a.name);
-      }
-    }
-    const all = [...new Set([...producersOf.keys(), ...consumersOf.keys()])].sort();
-    return {
-      edges: all.map((c) => {
-        const p = [...(producersOf.get(c) ?? [])].sort();
-        const cons = [...(consumersOf.get(c) ?? [])].sort();
-        // An app on both sides of the same constant is a transit/broker hop.
-        const transit = p.filter((x) => cons.includes(x));
-        return {
-          constant: c, producers: p, consumers: cons,
-          ...(transit.length && { transitApps: transit }),
-          unmatched: p.length === 0 || cons.length === 0,
-        };
-      }),
-    };
+    return { edges: crossAppEdges(analyzed.map((a) => ({ name: a.name, analysis: a.analysis! })), str(args.constant)) };
   },
 
   searchMessages(args, ctx) {
@@ -522,7 +540,7 @@ const EXECUTORS: Record<string, Executor> = {
       re = new RegExp(pattern, 'i');
     } catch {
       // Fall back to a literal substring rather than failing the turn.
-      re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      re = new RegExp(escapeRegExp(pattern), 'i');
     }
     const messages = app.analysis.messageInterfaces
       .filter((m) => re.test(m.msgTypeConstant) || (m.struct ? re.test(m.struct.name) : false))
